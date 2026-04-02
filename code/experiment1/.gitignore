@@ -1,0 +1,14 @@
+# Ignore compiled Stan binaries and any data files that drift in
+*.o
+*.so
+*.dll
+*.d
+*.hpp
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.sav
+*.rds
+*.RData
+
