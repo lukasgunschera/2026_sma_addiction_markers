@@ -11,10 +11,11 @@
 
 ## SETUP ====================================================================================================================
 
-set.seed(777) # set seed for random processes
-
 library(renv)
 renv::restore() # reproducible environment
+
+# set parameters and seed
+source(here::here("code", "00_setup.R"))
 
 # load packages
 pacman::p_load("here", "plyr", "psych", "dplyr", "tibble", "ggpubr", "magrittr", "labelled", "sjlabelled")
@@ -51,15 +52,15 @@ data <- fun_parsing(file = data_files)
 ### Exclude Participants ----------------------------------------------------------------------------------------------------
 
 # extract participant identifiers who failed the (hard) catch questions
-f_hard <- data$questionnaires %>%
-  filter(catch_questions_hard == "fail") %>%
-  select(subj_id) %>%
+f_hard <- data$questionnaires |>
+  dplyr::filter(catch_questions_hard == "fail") |>
+  dplyr::select(subj_id) |>
   pull()
 
 # extract participant identifiers who failed the (easy) catch questions
-f_easy <- data$questionnaires %>%
-  filter(catch_questions_easy == "fail") %>%
-  select(subj_id) %>%
+f_easy <- data$questionnaires |>
+  dplyr::filter(catch_questions_easy == "fail") |>
+  dplyr::select(subj_id) |>
   pull()
 
 subj_ids_to_exclude <- unique(c(f_hard, f_easy))
@@ -74,7 +75,7 @@ data$task_data <- subset(data$task_data, !(subj_id %in% subj_ids_to_exclude))
 data$questionnaires <- subset(data$questionnaires, !(subj_id %in% subj_ids_to_exclude))
 
 # save data
-data %>% saveRDS(., here::here("data", "experiment1", "processed", "data.RDS"))
+data |> saveRDS(., here::here("data", "experiment1", "processed", "data.RDS"))
 
 ## CREATE CODEBOOK ==========================================================================================================
 
@@ -84,8 +85,8 @@ codebook_names <- purrr::map_dfr(data, ~ enframe(get_label(.x)))
 # compute descriptives and select relevant columns
 codebook_descriptives <- purrr::map_dfr(
   data,
-  ~ psych::describe(.x) %>%
-    dplyr::as_tibble() %>%
+  ~ psych::describe(.x) |>
+    dplyr::as_tibble() |>
     dplyr::select("n", "min", "max", "mean", "sd", "skew", "kurtosis")
 )
 
