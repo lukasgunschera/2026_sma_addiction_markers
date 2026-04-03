@@ -78,6 +78,8 @@ if (firstrun) {
     "output/figures/manuscript",
     "output/figures/experiment1/analyses",
     "output/figures/experiment2/analyses",
+    "output/figures/experiment1/analyses_sensitivity",
+    "output/figures/experiment2/analyses_sensitivity",
     "output/figures/pilot/experiment1/modelfit",
     "output/figures/pilot/experiment2/modelfit",
     "output/rds"
