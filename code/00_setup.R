@@ -1,49 +1,93 @@
-## ======================================================================================================================= ##
+## ====================================================================================================================== ##
 ## Script:    SETUP
-## ======================================================================================================================= ##
+## ====================================================================================================================== ##
 ## Authors:   Lukas J. Gunschera
 ## Date:      Wed Apr  1 15:56:41 2026
-## ======================================================================================================================= ##
-## This setup script should be run once to initialise the folder structure and ensure dependencies are running.
-## ======================================================================================================================= ##
+## ====================================================================================================================== ##
+## Sourceable setup script. Controls which sections run via the `firstrun` flag.
+##
+## USAGE:
+##   # First time only — installs packages, creates folders & .gitignores, imports fonts
+##   firstrun <- TRUE;  source(here::here("00_setup.R"))
+##
+##   # Every subsequent session — loads packages, sets options & plot defaults
+##   firstrun <- FALSE; source(here::here("00_setup.R"))
+##   — or simply —
+##   source(here::here("00_setup.R"))   # defaults to firstrun = FALSE
+##
+## SECTION SCHEDULE:
+##   Section                   │ firstrun = TRUE │ firstrun = FALSE
+##   ──────────────────────────┼─────────────────┼─────────────────
+##   renv::restore()           │       ✓         │
+##   Folder structure          │       ✓         │
+##   Package installation      │       ✓         │
+##   Package loading           │       ✓         │        ✓
+##   extrafont::font_import()  │       ✓         │
+##   extrafont::loadfonts()    │       ✓         │        ✓
+##   Global options & seed     │       ✓         │        ✓
+##   Plot defaults & themes    │       ✓         │        ✓
+##   Source custom functions   │       ✓         │        ✓
+##   .gitignore creation       │       ✓         │
+## ====================================================================================================================== ##
 
-## ENVIRONMENT ==============================================================================================================
+# resolve firstrun — allows bare source() calls to default safely
+if (!exists("firstrun")) {
+  firstrun <- FALSE
+  message("[setup] `firstrun` not set — defaulting to FALSE (skipping install/scaffold steps)")
+}
+
+stopifnot("`firstrun` must be TRUE or FALSE" = is.logical(firstrun) && length(firstrun) == 1)
+message("[setup] Running with firstrun = ", firstrun)
+
+## 1. ENVIRONMENT [first run only] =========================================================================================
+
 
 library(renv)
-renv::restore() # restore package versions recorded in renv.lock
+
+if (firstrun) {
+  library(renv)
+  renv::restore()
+}
+
+options(digits = 7)
+set.seed(777)
 
 library(here)
-here::i_am("renv.lock") # anchor the project root
+here::i_am("renv.lock") # anchor the project root — always needed
 
-source(here::here("code", "functions", "fun_folderstructure.R"))
+## 2. FOLDER STRUCTURE [first run only] ====================================================================================
 
-## FOLDER STRUCTURE =========================================================================================================
+if (firstrun) {
+  source(here::here("code", "functions", "fun_folderstructure.R"))
 
-folders <- c(
-  "code/stan",
-  "code/functions",
-  "code/pilot",
-  "code/experiment1/functions",
-  "code/experiment2/functions",
-  "data/experiment1/modelling",
-  "data/experiment2/modelling",
-  "data/experiment1/raw",
-  "data/experiment2/raw",
-  "data/experiment1/processed",
-  "data/experiment2/processed",
-  "data/pilot",
-  "output/documentation",
-  "output/figures/manuscript",
-  "output/figures/experiment1/analyses",
-  "output/figures/experiment2/analyses",
-  "output/figures/pilot/experiment1/modelfit",
-  "output/figures/pilot/experiment2/modelfit",
-  "output/rds"
-)
+  folders <- c(
+    "code/stan",
+    "code/functions",
+    "code/pilot",
+    "code/experiment1/functions",
+    "code/experiment2/functions",
+    "data/experiment1/modelling/parameters",
+    "data/experiment2/modelling/parameters",
+    "data/experiment1/raw",
+    "data/experiment2/raw",
+    "data/experiment1/processed",
+    "data/experiment2/processed",
+    "data/pilot",
+    "output/rds",
+    "output/documentation",
+    "output/figures/manuscript",
+    "output/figures/experiment1/analyses",
+    "output/figures/experiment2/analyses",
+    "output/figures/pilot/experiment1/modelfit",
+    "output/figures/pilot/experiment2/modelfit",
+    "output/rds"
+  )
 
-create_project_structure(folders)
+  create_project_structure(folders)
+}
 
-## DEPENDENCIES =============================================================================================================
+
+## 3. DEPENDENCIES =========================================================================================================
 
 packages <- c(
   # --- Data wrangling & utilities ---
@@ -57,7 +101,6 @@ packages <- c(
   "lubridate",
   "janitor",
   "tibble",
-  "plyr",
   "zoo",
   "glue",
   "readr",
@@ -112,52 +155,64 @@ packages <- c(
   "kableExtra"
 )
 
-# install uninstalled packages
-new_packages <- packages[!packages %in% installed.packages()[, "Package"]]
-if (length(new_packages)) install.packages(new_packages)
+### 3a. Installation [first run only] --------------------------------------------------------------------------------------
+
+if (firstrun) {
+  # CRAN packages
+  new_packages <- packages[!packages %in% installed.packages()[, "Package"]]
+  if (length(new_packages)) install.packages(new_packages)
+
+  # styler
+  if (!requireNamespace("styler", quietly = TRUE)) install.packages("styler", verbose = TRUE)
+
+  # devtools (needed for GitHub installs below)
+  if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
+
+  # ggwaffle — GitHub only
+  if (!requireNamespace("ggwaffle", quietly = TRUE)) {
+    devtools::install_github("liamgilbey/ggwaffle")
+  }
+
+  # cmdstanr — Stan r-universe
+  if (!requireNamespace("cmdstanr", quietly = TRUE)) {
+    install.packages("cmdstanr", repos = c("https://stan-dev.r-universe.dev", getOption("repos")))
+  }
+
+  # hBayesDM — GitHub only
+  if (!requireNamespace("hBayesDM", quietly = TRUE)) {
+    devtools::install_github("CCS-Lab/hBayesDM", subdir = "R")
+  }
+
+  message("[setup] Package installation complete.")
+}
+
+### 3b. Loading [always] ---------------------------------------------------------------------------------------------------
 
 invisible(lapply(packages, library, character.only = TRUE))
+message("[setup] Packages loaded.")
 
-# install styler
-if (!requireNamespace("styler", quietly = TRUE)) {
-  install.packages("styler", verbose = TRUE)
-}
 
-# install devtools
-if (!requireNamespace("devtools", quietly = TRUE)) {
-  install.packages("devtools")
-}
-
-# install ggwaffle
-if (!requireNamespace("ggwaffle", quietly = TRUE)) {
-  devtools::install_github("liamgilbey/ggwaffle")
-}
-
-# install cmdstanr from stan
-if (!requireNamespace("cmdstanr", quietly = TRUE)) {
-  install.packages("cmdstanr", repos = c("https://stan-dev.r-universe.dev", getOption("repos")))
-}
-
-# install hBayesDM from GitHub
-if (!requireNamespace("hBayesDM", quietly = TRUE)) {
-  devtools::install_github("CCS-Lab/hBayesDM", subdir = "R")
-}
-
-## GLOBAL OPTIONS ===========================================================================================================
+## 4. GLOBAL OPTIONS [always] ==============================================================================================
 
 options(
-  brms.backend = Sys.getenv("BRMS_BACKEND", "rstan"),
-  brms.threads = as.numeric(Sys.getenv("BRMS_THREADS", 1)),
-  mc.cores = as.numeric(Sys.getenv("MAX_CORES", 4)),
-  digits = 2,
+  brms.backend        = Sys.getenv("BRMS_BACKEND", "rstan"),
+  brms.threads        = as.numeric(Sys.getenv("BRMS_THREADS", 1)),
+  mc.cores            = as.numeric(Sys.getenv("MAX_CORES", 4)),
+  digits              = 2,
   tinytable_tt_digits = 3
 )
 
 set.seed(777)
 
-## VISUAL SETTINGS ==========================================================================================================
 
-extrafont::font_import()
+## 5. VISUAL SETTINGS [always] =============================================================================================
+
+# font_import() is slow (~minutes) — only run on first setup, never on every source()
+if (firstrun) {
+  extrafont::font_import(prompt = FALSE)
+  message("[setup] System fonts imported.")
+}
+
 extrafont::loadfonts(device = "pdf")
 extrafont::loadfonts(device = "postscript")
 
@@ -198,11 +253,12 @@ theme_custom <- function(base_size = 12, base_family = "Arial") {
     )
 }
 
-## GITIGNORE ================================================================================================================
+## 6. GITIGNORE SCAFFOLD [first run only] ==================================================================================
 
-#### Root gitignore ---------------------------------------------------------------------------------------------------------
+if (firstrun) {
+  ### Root -----------------------------------------------------------------------------------------------------------------
 
-root_gitignore <- r"(
+  root_gitignore <- r"(
 # ── R ────────────────────────────────────────────────────────────────────────
 .Rhistory
 .RData
@@ -238,7 +294,7 @@ data/
 # ── Serialised R objects ─────────────────────────────────────────────────────
 output/rds/
 
-# ── Stan / CmdStan compiled objects ─────────────────────────────────────────
+# ── Stan / CmdStan compiled objects ──────────────────────────────────────────
 *.o
 *.so
 *.dll
@@ -262,75 +318,72 @@ $RECYCLE.BIN/
 *~
 )"
 
-writeLines(trimws(root_gitignore), here::here(".gitignore"))
-message("Created: .gitignore (root)")
+  writeLines(trimws(root_gitignore), here::here(".gitignore"))
+  message("Created: .gitignore (root)")
 
-#### Sensitive Folders ------------------------------------------------------------------------------------------------------
-# blanket block rule for sensitive folders (i.e. ignore everything inside)
+  ### Data folders — blanket block -----------------------------------------------------------------------------------------
 
-block_all <- "# Block all files in this folder — data must never be committed\n*\n!.gitignore\n"
+  block_all <- "# Block all files in this folder — data must never be committed\n*\n!.gitignore\n"
 
-# all data subfolders
-blocked_folders <- c(
-  "data/experiment1/raw",
-  "data/experiment2/raw",
-  "data/experiment1/processed",
-  "data/experiment2/processed",
-  "data/pilot"
-)
+  blocked_folders <- c(
+    "data/experiment1/raw",
+    "data/experiment2/raw",
+    "data/experiment1/processed",
+    "data/experiment2/processed",
+    "data/pilot"
+  )
 
-for (folder in blocked_folders) {
-  path <- here::here(folder)
-  dir.create(path, recursive = TRUE, showWarnings = FALSE)
-  writeLines(block_all, file.path(path, ".gitignore"))
-  message("Created: ", folder, "/.gitignore  [block all]")
+  for (folder in blocked_folders) {
+    path <- here::here(folder)
+    dir.create(path, recursive = TRUE, showWarnings = FALSE)
+    writeLines(block_all, file.path(path, ".gitignore"))
+    message("Created: ", folder, "/.gitignore  [block all]")
+  }
+
+  ### Code & output folders ------------------------------------------------------------------------------------------------
+
+  code_gitignore <- "# Ignore compiled Stan binaries and any data files that drift in\n*.o\n*.so\n*.dll\n*.d\n*.hpp\n*.csv\n*.tsv\n*.xlsx\n*.xls\n*.sav\n*.rds\n*.RData\n"
+  output_gitignore <- "# Ignore intermediate/scratch files; keep committed figures only if desired\n*.rds\n*.RData\n*.csv\n"
+
+  code_folders <- c(
+    "code/stan",
+    "code/functions",
+    "code/pilot",
+    "code/experiment1",
+    "code/experiment1/functions",
+    "code/experiment2",
+    "code/experiment2/functions"
+  )
+
+  output_folders <- c(
+    "output/figures",
+    "output/figures/experiment1",
+    "output/figures/experiment2",
+    "output/figures/manuscript",
+    "output/figures/experiment1/analyses",
+    "output/figures/experiment2/analyses",
+    "output/figures/pilot/experiment1/modelfit",
+    "output/figures/pilot/experiment2/modelfit"
+  )
+
+  for (folder in code_folders) {
+    path <- here::here(folder)
+    dir.create(path, recursive = TRUE, showWarnings = FALSE)
+    writeLines(code_gitignore, file.path(path, ".gitignore"))
+    message("Created: ", folder, "/.gitignore  [code]")
+  }
+
+  for (folder in output_folders) {
+    path <- here::here(folder)
+    dir.create(path, recursive = TRUE, showWarnings = FALSE)
+    writeLines(output_gitignore, file.path(path, ".gitignore"))
+    message("Created: ", folder, "/.gitignore  [output]")
+  }
+
+  all_folders <- c("(root)", blocked_folders, code_folders, output_folders)
+  message("\n── .gitignore files written ────────────────────────────────────────────────")
+  message(paste0("  ", all_folders, collapse = "\n"))
+  message("\nData folders are fully blocked. Nothing inside data/ or output/rds/ can be committed.")
 }
 
-#### Standard ignore rules for remaining folders and outputs ----------------------------------------------------------------
-
-code_gitignore <- "# Ignore compiled Stan binaries and any data files that drift in\n*.o\n*.so\n*.dll\n*.d\n*.hpp\n*.csv\n*.tsv\n*.xlsx\n*.xls\n*.sav\n*.rds\n*.RData\n"
-
-output_gitignore <- "# Ignore intermediate/scratch files; keep committed figures only if desired\n*.rds\n*.RData\n*.csv\n"
-
-code_folders <- c(
-  "code/stan",
-  "code/functions",
-  "code/pilot",
-  "code/experiment1/functions",
-  "code/experiment2/functions",
-  "code/experiment1",
-  "code/experiment2"
-)
-
-output_folders <- c(
-  "output/figures",
-  "output/figures/experiment1",
-  "output/figures/experiment2",
-  "output/figures/manuscript",
-  "output/figures/experiment1/analyses",
-  "output/figures/experiment2/analyses",
-  "output/figures/pilot/experiment1/modelfit",
-  "output/figures/pilot/experiment2/modelfit"
-)
-
-for (folder in code_folders) {
-  path <- here::here(folder)
-  dir.create(path, recursive = TRUE, showWarnings = FALSE)
-  writeLines(code_gitignore, file.path(path, ".gitignore"))
-  message("Created: ", folder, "/.gitignore  [code]")
-}
-
-for (folder in output_folders) {
-  path <- here::here(folder)
-  dir.create(path, recursive = TRUE, showWarnings = FALSE)
-  writeLines(output_gitignore, file.path(path, ".gitignore"))
-  message("Created: ", folder, "/.gitignore  [output]")
-}
-
-#### Summary ----------------------------------------------------------------------------------------------------------------
-
-all_folders <- c("(root)", blocked_folders, code_folders, output_folders)
-
-message("\n── .gitignore files written ────────────────────────────────────────────────")
-message(paste0("  ", all_folders, collapse = "\n"))
-message("\nData folders are fully blocked (*). Nothing inside data/ or output/rds/ can be committed unless a file is explicitly un-ignored with '!'.")
+message("[setup] Done. firstrun = ", firstrun)
