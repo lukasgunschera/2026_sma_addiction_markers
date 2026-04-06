@@ -29,6 +29,9 @@ gg_taskbehaviour_exp2 <- readRDS(here::here("output", "rds", "gg_taskbehaviour_e
 gg_taskbehaviour_bar_exp1 <- readRDS(here::here("output", "rds", "gg_taskbehaviour_exp1_bar.rds"))
 gg_taksbehaviour_bar_exp2 <- readRDS(here::here("output", "rds", "gg_taskbehaviour_exp2_bar.rds"))
 
+gg_kekr_distributions_exp1 <- readRDS(here::here("output", "rds", "kekr_parameter_distributions_exp1.rds"))
+gg_kekr_distributions_exp2 <- readRDS(here::here("output", "rds", "kekr_parameter_distributions_exp2.rds"))
+
 # arranged liking plot
 ggpubr::ggarrange(
   gg_like_exp1, gg_like_exp2,
@@ -88,5 +91,15 @@ ggpubr::ggarrange(
 ) |>
   ggplot2::ggsave(
     path = here::here("output", "figures", "manuscript"), filename = "taskbehaviour_bar.png",
+    device = "png", width = 12, height = 6, dpi = 800, bg = "white"
+  )
+
+# parameter distributions
+ggpubr::ggarrange(
+  gg_kekr_distributions_exp1, gg_kekr_distributions_exp2,
+  nrow = 1, ncol = 2, align = "hv", labels = c("", ""), font.label = list(size = 16, face = "bold")
+) |>
+  ggplot2::ggsave(
+    path = here::here("output", "figures", "manuscript"), filename = "kekr_parameter_distributions.png",
     device = "png", width = 12, height = 6, dpi = 800, bg = "white"
   )

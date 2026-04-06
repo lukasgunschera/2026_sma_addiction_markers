@@ -43,14 +43,13 @@ message("[setup] Running with firstrun = ", firstrun)
 
 
 library(renv)
+options(digits = 7)
+set.seed(777)
 
 if (firstrun) {
   library(renv)
   renv::restore()
 }
-
-options(digits = 7)
-set.seed(777)
 
 library(here)
 here::i_am("renv.lock") # anchor the project root — always needed
