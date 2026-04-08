@@ -71,13 +71,22 @@ ggpubr::ggarrange(
   )
 
 # arranged wanting-liking BSMAS correlation plot
+axis_theme <- ggplot2::theme(
+  axis.title = ggplot2::element_text(size = 18),
+  axis.text = ggplot2::element_text(size = 16),
+  legend.text = ggplot2::element_text(size = 16),
+)
+
+
 ggpubr::ggarrange(
-  gg_wlbsmas_exp1, gg_wlbsmas_exp2, gg_dsbsmas_exp2,
-  nrow = 1, ncol = 3, align = "hv", labels = c("A", "B"), font.label = list(size = 16, face = "bold")
+  gg_wlbsmas_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
+  gg_wlbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
+  gg_dsbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-8, -4, 0, 4, 8)),
+  nrow = 1, ncol = 3, align = "hv", labels = c("A", "B", "C"), font.label = list(size = 16, face = "bold")
 ) |>
   ggplot2::ggsave(
     path = here::here("output", "figures", "manuscript"), filename = "wlbsmas.png",
-    device = "png", width = 16, height = 4, dpi = 800, bg = "white"
+    device = "png", width = 18, height = 6, dpi = 800, bg = "white"
   )
 
 # arranged task behaviour plot
