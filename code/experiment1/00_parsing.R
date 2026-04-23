@@ -75,7 +75,7 @@ data$task_data <- subset(data$task_data, !(subj_id %in% subj_ids_to_exclude))
 data$questionnaires <- subset(data$questionnaires, !(subj_id %in% subj_ids_to_exclude))
 
 # save data
-data |> saveRDS(., here::here("data", "experiment1", "processed", "data.RDS"))
+data |> saveRDS(here::here("data", "experiment1", "processed", "data.RDS"))
 
 ## CREATE CODEBOOK ==========================================================================================================
 
