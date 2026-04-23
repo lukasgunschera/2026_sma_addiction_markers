@@ -24,6 +24,8 @@ gg_devalsens_exp2 <- readRDS(here::here("output", "rds", "gg_devaluation_sensiti
 gg_wlbsmas_exp1 <- readRDS(here::here("output", "rds", "gg_wlbsmas_exp1.rds"))
 gg_wlbsmas_exp2 <- readRDS(here::here("output", "rds", "gg_wlbsmas_exp2.rds"))
 gg_dsbsmas_exp2 <- readRDS(here::here("output", "rds", "gg_dsbsmas_exp2.rds"))
+gg_wantbsmas_exp1 <- readRDS(here::here("output", "rds", "gg_wantingbsmas_exp1.rds"))
+gg_wantbsmas_exp2 <- readRDS(here::here("output", "rds", "gg_wantingbsmas_exp2.rds"))
 
 gg_taskbehaviour_exp1 <- readRDS(here::here("output", "rds", "gg_taskbehaviour_exp1.rds"))
 gg_taskbehaviour_exp2 <- readRDS(here::here("output", "rds", "gg_taskbehaviour_exp2.rds"))
@@ -67,26 +69,28 @@ ggpubr::ggarrange(
 ) |>
   ggplot2::ggsave(
     path = here::here("output", "figures", "manuscript"), filename = "wantlike.png",
-    device = "png", width = 12, height = 4, dpi = 800, bg = "white"
+    device = "png", width = 12, height = 8, dpi = 800, bg = "white"
   )
 
 # arranged wanting-liking BSMAS correlation plot
 axis_theme <- ggplot2::theme(
-  axis.title = ggplot2::element_text(size = 18),
-  axis.text = ggplot2::element_text(size = 16),
-  legend.text = ggplot2::element_text(size = 16),
+  axis.title = ggplot2::element_text(size = 24),
+  axis.text = ggplot2::element_text(size = 22),
+  legend.text = ggplot2::element_text(size = 20),
 )
 
 
 ggpubr::ggarrange(
+  gg_wantbsmas_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
+  gg_wantbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)) + labs(x = "Wanting"),
   gg_wlbsmas_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
   gg_wlbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
   gg_dsbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-8, -4, 0, 4, 8)),
-  nrow = 1, ncol = 3, align = "hv", labels = c("A", "B", "C"), font.label = list(size = 16, face = "bold")
+  nrow = 2, ncol = 3, align = "hv", labels = c("A", "B", "C"), font.label = list(size = 16, face = "bold")
 ) |>
   ggplot2::ggsave(
     path = here::here("output", "figures", "manuscript"), filename = "wlbsmas.png",
-    device = "png", width = 18, height = 6, dpi = 800, bg = "white"
+    device = "png", width = 18, height = 12, dpi = 800, bg = "white"
   )
 
 # arranged task behaviour plot
