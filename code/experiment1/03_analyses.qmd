@@ -1,0 +1,3541 @@
+---
+title: "Analyses"
+description: "This document a) takes the model fits from the 'sma_analysis.R' script and examines the results, b) visualises the data and tests assumption, and c) merges all subsequent confirmatory and exploratory analyses into a single reproducible output."
+author:
+  - name: Lukas Gunschera
+    orcid: 0000-0002-8241-0833
+    email: l.gunschera@outlook.com
+    corresponding: true
+    affiliation:
+      - ref: 1
+affiliations:
+  - id: 1
+    name: University of Cambridge
+    department: Medical Research Council Cognition and Brain Sciences Unit
+format:
+  html:
+    code-fold: true
+    toc: true
+editor: visual
+---
+
+```{r}
+#| label: setup-document
+#| include: false
+#| message: false
+#| cache: false
+
+source(here::here("code", "00_setup.R"))
+set.seed(777)
+
+pacman::p_load(here, renv, gt, zoo, plm, glue, brms, ragg, nlme, knitr, purrr, dplyr, tidyr, Hmisc, viridis, stringr, rstatix, janitor, ggplot2, ggExtra, devtools, gtExtras, magrittr, hBayesDM, corrplot, patchwork, extrafont, ggpattern, bayesplot, tidybayes, lubridate, posterior, tidyverse, kableExtra, BayesFactor, systemfonts, ggdist, ggpubr)
+
+# output options
+is_html <- knitr::is_html_output()
+knitr::opts_chunk$set(
+  eval = TRUE,
+  cache = FALSE,  # disable global caching by default
+  warning = FALSE,
+  error = FALSE,
+  message = FALSE,
+  echo = is_html,
+  fig.width = 7,
+  fig.height = 5,
+  dpi = 300,
+  dev = "ragg_png"  # use ragg_png for better performance
+)
+
+# load custom dependencies
+source(here::here("code", "experiment1", "functions", "fun_plots.R"))
+source(here::here("code", "experiment1", "functions", "fun_helper.R"))
+source(here::here("code", "experiment1", "functions", "fun_fit_models.R"))
+source(here::here("code", "experiment1", "functions", "fun_model_preprocess.R"))
+source(here::here("code", "experiment1", "functions", "fun_model_comparison.R"))
+source(here::here("code", "experiment1", "functions", "fun_modeling_cleandata.R"))
+source(here::here("code", "experiment1", "functions", "fun_parameter_estimates.R"))
+source(here::here("code", "experiment1", "functions", "fun_posterior_predictions.R"))
+source(here::here("code", "experiment1", "functions", "fun_model_convergence_check.R"))
+```
+
+```{r}
+cat("Document rendered at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+```
+
+## Data
+
+Load the pocessed participant data as returned from the script 'code/sma_dataprocessing.R'. Note, the current script depends on you running the sma_dataprocessing.R script prior in order to access the returned data object. This is to reduce computational demands and redundancies.
+
+```{r}
+#| label: data-import
+#| cache: false
+
+data <- readRDS(here::here("data", "experiment1", "processed", "data.RDS"))
+data_params <- readRDS(here::here("data", "experiment1", "modelling", "parameters", "m3_para_data.RDS"))
+```
+
+```{r}
+# display summary statistics of model parameters
+cat("Model parameter summary statistics:\n")
+
+summary_stats <- data_params |>
+  dplyr::select(a_tiktok, a_netflix, 
+                strap_tiktok_avg, strap_netflix_avg, 
+                wl_tiktok, wl_netflix) |>
+  summary()
+
+print(summary_stats)
+```
+
+For computational reasons, we will perform analyses on the raw scores of wanting and liking estimates for both conditions. Whereas the z-transformation helps with interpretation purposes, the standardisation causes problems with later analyses which perform standardisation as part of the statistical test. Specicially, the Bayesfactor package works with standardised effect sizes, meaning performing the analyses on the z-transformed data results in a double-transformation.
+
+```{r}
+#| label: z-transformation
+
+# get the mean and standard deviation for wanting estimates (across conditions)
+a_mean <- mean(c(data_params$a_netflix, data_params$a_tiktok), na.rm = TRUE)
+a_sd <- sd(c(data_params$a_netflix, data_params$a_tiktok), na.rm = TRUE)
+
+# get the mean and standard deviation for liking estimates (across conditions)
+strap_mean <- mean(c(data_params$strap_netflix_avg, data_params$strap_tiktok_avg), na.rm = TRUE)
+strap_sd <- sd(c(data_params$strap_netflix_avg, data_params$strap_tiktok_avg), na.rm = TRUE)
+
+# z-transform variables
+data_params <- data_params |>
+  mutate(
+    # wanting estimates
+    a_netflix_z = (a_netflix - a_mean) / a_sd,
+    a_tiktok_z = (a_tiktok - a_mean) / a_sd,
+    
+    # liking estimates
+    strap_netflix_avg_z = (strap_netflix_avg - strap_mean) / strap_sd,
+    strap_tiktok_avg_z = (strap_tiktok_avg - strap_mean) / strap_sd,
+    
+    # wanting liking difference
+    wl_tiktok_z = a_tiktok_z - strap_tiktok_avg_z,
+    wl_netflix_z = a_netflix_z - strap_netflix_avg_z
+  )
+```
+
+## Compliance
+
+The experimental procedure involved several compliance questions that were included to assess participants' adherence to the protocol. Participants who indicated that they had not complied to either the task or the waiting period part of the experiment were given the opportunity to provide an open response explanation. We used all available information to asses participants' compliance.
+
+To examine the effect of this and other decisions, we report the effects on our findings in 'sma_sensitivity.qmd'. Specifically, we provide sensitivity analyses for a) analyses on the entire sample, and b) analyses on the sample that excludes anyone who indicated that they had not complied to some aspect of the experimental procedure (regardless of explanations).
+
+### Task compliance
+
+Compliance to the task instructions was assessed asking participants to indicate whether they had used the same finger to press the mouse throughout the task, with binary Yes/No response options.
+
+```{r}
+#| label: compliance-reasons
+
+data_params |> dplyr::filter(task_tiktok_compliance_text != "NA") |> pull(task_tiktok_compliance_text)
+data_params |> dplyr::filter(task_netflix_compliance_text != "NA") |> pull(task_netflix_compliance_text)
+```
+
+The reasons for task non-compliance included a) accidental switching of the fingers used to click, or b) deliberate but brief changes in finger use. We consider both of these 'violations' to be minor and do not exclude participants who accidentally or briefly switched fingers throughout the effort expenditure task.
+
+### Waiting compliance
+
+Compliance to the instructions of the waiting period was assessed using the question 'Did you use \[TikTok/Netflix\] for the entire duration of the waiting period', with binary Yes/No response options.
+
+```{r}
+#| label: compliance-reasons-watching
+#| warning: false
+#| cache: false
+
+# non-compliance during TikTok condition
+data_params |> dplyr::filter(watch_tiktok_compliance_text != "NA") |> pull(watch_tiktok_compliance_text)
+
+# non-compliance during Netflix condition
+data_params |> dplyr::filter(watch_netflix_compliance_text != "NA") |> pull(watch_netflix_compliance_text)
+```
+
+The reasons for waiting period non-compliance included 1) internet problems, 2) engaging in other activities, or 3) continuing to watch Netflix from where one had left off before. We consider internet problems (1) and engaging in other activities (2) to be non-compliance that may affect the validity of the results. Therefore, the following analyses exclude participants who indicated this.
+
+```{r}
+#| label: compliance-exclusion
+#| cache: false
+#| warning: false
+#| message: false
+#| echo: false
+#| include: false
+
+# get subject identifier of participant reading magazines
+p_excl <- data_params |> 
+  dplyr::filter(watch_netflix_compliance_text == "I also go through the magazines briefly") |> 
+  pull(subj_id)
+
+# exclude participants based on compliance violations
+data_params <- data_params |>
+  dplyr::filter(watch_tiktok_compliance == TRUE) |> # exclude TikTok non-compliers
+  dplyr::filter(subj_id != p_excl) # exclude Netflix non-compliers
+```
+
+Following the above exclusions based on non-compliance during the task or waiting period of the experiment, we continue with the analyses based on a sample of **`r sprintf("%.0f", nrow(data_params))`** participants.
+
+## Descriptives
+
+The following sections will explore the sample composition and demographic characteristics.
+
+```{r}
+#| label: sample-descriptives
+#| warning: false
+
+# select variables to be summarised
+descriptive_stats <- data_params |>
+  dplyr::select(age, gender, ethnicity, income, income_currency, neuro_conditions, mh_conditions) |>
+  dplyr::mutate(income_gbp = case_when(
+    income_currency == "eur" ~ income * 0.85,
+    TRUE ~ income  
+  ))
+
+# numeric summaries for continuous variables
+summary_stats <- descriptive_stats |>
+  dplyr::summarise(
+    n = n(),
+    mean_age = mean(age, na.rm = TRUE),
+    min_age = min(age, na.rm = TRUE),
+    max_age = max(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    median_income_gbp = median(income_gbp, na.rm = TRUE),
+    mean_income_gbp = mean(income_gbp, na.rm = TRUE)
+  )
+
+# counts of categories for categorical variables
+gender_counts <- table(descriptive_stats$gender)
+ethnicity_counts <- table(descriptive_stats$ethnicity)
+currency_counts <- table(descriptive_stats$income_currency)
+neurocond_counts <- table(descriptive_stats$neuro_conditions)
+mentalcond_counts <- table(descriptive_stats$mh_conditions)
+
+# calculate summary statistics
+demo_stats <- data_params |>
+  mutate(
+    income_gbp = ifelse(income_currency == "eur", income * 0.85, income)
+  ) |>
+  dplyr::summarise(
+    n = n(),
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    min_age = min(age, na.rm = TRUE),
+    max_age = max(age, na.rm = TRUE),
+    mean_income = mean(income_gbp, na.rm = TRUE),
+    median_income = median(income_gbp, na.rm = TRUE)
+  )
+
+# create counts for categorical variables
+create_counts <- function(data, var) {
+    data |>
+        dplyr::count({{ var }}) |>
+        dplyr::mutate(
+            percent = n / sum(n) * 100,
+            display = sprintf("%d (%.1f%%)", n, percent)
+        )
+}
+
+gender_counts <- create_counts(data_params, gender)
+ethnicity_counts <- create_counts(data_params, ethnicity)
+currency_counts <- create_counts(data_params, income_currency)
+
+# demographic table
+demo_table <- tibble(
+  Characteristic = c(
+    "Sample Size",
+    "Age (years)", "  Mean (SD)", "  Range",
+    "Gender", paste0("  ", gender_counts$gender),
+    "Ethnicity", paste0("  ", ethnicity_counts$ethnicity),
+    "Annual Income (GBP)", "  Mean", "  Median",
+    "Reported Currency", paste0("    ", currency_counts$income_currency)
+  ),
+  Value = c(
+    sprintf("N = %d", demo_stats$n),
+    "",
+    sprintf("%.1f (%.1f)", demo_stats$mean_age, demo_stats$sd_age),
+    sprintf("%d-%d", demo_stats$min_age, demo_stats$max_age),
+    "",
+    gender_counts$display,
+    "",
+    ethnicity_counts$display,
+    "",
+    sprintf("£%s", format(round(demo_stats$mean_income), big.mark = ",")),
+    sprintf("£%s", format(round(demo_stats$median_income), big.mark = ",")),
+    "",
+    currency_counts$display
+  )
+) |>
+  gt() |>
+  tab_header(
+    title = md("**Table 1**"),
+    subtitle = "Participant Demographic Characteristics"
+  ) |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(columns = Characteristic, rows = !str_starts(Characteristic, "  "))
+  ) |>
+  tab_options(
+    table.width = pct(85),
+    table.font.names = "Arial",
+    heading.title.font.size = px(10),    
+    heading.title.font.weight = "bold",  
+    heading.subtitle.font.size = px(10), 
+    heading.subtitle.font.weight = "normal", 
+    column_labels.hidden = TRUE,
+    table.border.top.style = "none",
+    table.border.bottom.style = "none",
+    data_row.padding = px(4),
+    source_notes.font.size = px(10)
+  )
+
+# print table
+demo_table
+```
+
+### Session Timing and Duration
+
+Get the average number of days between the first and second session of participants.
+
+```{r}
+#| label: session-timing
+
+session_times <- data$task_meta_data |> 
+  dplyr::filter(subj_id %in% data_params$subj_id)  |> 
+  dplyr::group_by(subj_id, session_id) |>
+  dplyr::summarise(session_start = min(start_time), .groups = "drop") |>
+  dplyr::arrange(subj_id, session_start)
+
+# calculate days between first and second session for each subject
+days_between <- session_times |>
+  dplyr::group_by(subj_id) |>
+  dplyr::filter(n() >= 2) |>  # only subjects with two sessions
+  dplyr::summarise(
+    first_session = min(session_start),
+    second_session = nth(session_start, 2),
+    days_between = as.numeric(difftime(second_session, first_session, units = "days")),
+    .groups = "drop"
+  )
+
+# calculate the average
+average_days <- mean(days_between$days_between, na.rm = TRUE)
+sd_days <- sd(days_between$days_between, na.rm = TRUE)
+```
+
+The average number of days between sessions one and two was `r sprintf("%.3f", round(average_days, 3))`, with a standard deviation of `r sprintf("%.0f", round(sd_days, 3))`.
+
+Next, compute the average task duration for both sessions.
+
+```{r}
+#| label: task-duration
+
+# calculate average task duration for first and second sessions separately
+session_durations <- data$task_meta_data |>
+  dplyr::group_by(subj_id, session_id) |>
+  dplyr::summarise(session_duration = sum(as.numeric(task_duration)), .groups = "drop") |>
+  dplyr::arrange(subj_id, session_id) |>
+  dplyr::group_by(subj_id) |>
+  dplyr::filter(n() >= 2) |>  # Only subjects with at least 2 sessions
+  dplyr::mutate(session_order = row_number()) |>
+  dplyr::ungroup()
+
+# calculate averages for each session
+first_session_avg <- session_durations |>
+  dplyr::filter(session_order == 1) |>
+  dplyr::summarise(avg_duration = mean(session_duration, na.rm = TRUE)) |>
+  pull(avg_duration)
+
+second_session_avg <- session_durations |>
+  dplyr::filter(session_order == 2) |>
+  dplyr::summarise(avg_duration = mean(session_duration, na.rm = TRUE)) |>
+  pull(avg_duration)
+
+
+print(paste("Average duration of first session task:", round(first_session_avg / 60, 3), "minutes"))
+print(paste("Average duration of second session task:", round(second_session_avg / 60, 3), "minutes"))
+```
+
+The average task completion duration was `r sprintf("%.3f", round(first_session_avg / 60, 3))` minutes for the 1st session, and `r sprintf("%.0f", round(second_session_avg / 60, 3))` minutes for the 2nd session.
+
+The two sesions of participants were scheduled for the same time of day to address potential confounding time-of-day/chronobiology effects on effort-based decision-making.
+
+```{r}
+#| label: session-time-of-day
+
+# Compare times of day between sessions within participants
+time_comparison <- session_times |>
+  dplyr::group_by(subj_id) |>
+  dplyr::filter(n() >= 2) |>  # Only subjects with at least 2 sessions
+  dplyr::arrange(session_start) |>
+  dplyr::mutate(session_order = row_number()) |>
+  dplyr::filter(session_order <= 2) |>  # Only first two sessions
+  dplyr::select(subj_id, session_order, session_start) |>
+  tidyr::pivot_wider(names_from = session_order, values_from = session_start, names_prefix = "session_") |>
+  dplyr::mutate(
+    time_of_day_1 = as.numeric(format(session_1, "%H")) + as.numeric(format(session_1, "%M"))/60,
+    time_of_day_2 = as.numeric(format(session_2, "%H")) + as.numeric(format(session_2, "%M"))/60,
+    time_difference = abs(time_of_day_2 - time_of_day_1)
+  ) |>
+  # Handle times that cross midnight (e.g., 23:00 vs 01:00)
+  dplyr::mutate(
+    time_difference = ifelse(time_difference > 12, 24 - time_difference, time_difference)
+  )
+
+print("\n--- Time of Day Comparison ---")
+avg_time_diff <- mean(time_comparison$time_difference, na.rm = TRUE)
+sd_time_diff <- sd(time_comparison$time_difference, na.rm = TRUE)
+
+print(paste("Average time difference between sessions:", round(avg_time_diff, 3), "hours"))
+print(paste("Standard deviation of time differences:", round(sd_time_diff, 3), "hours"))
+print(paste("Average time difference in minutes:", round(avg_time_diff * 60, 3), "minutes"))
+```
+
+```{r}
+#| label: condition-descriptives
+#| warning: false
+
+# function for processing condition data 
+process_conditions <- function(prefix, condition_name) {
+  # Get condition columns (only logical)
+  cond_data <- data_params |>
+    dplyr::select(starts_with(paste0(prefix, "_conditions_"))) |>
+    dplyr::select(where(is.logical))
+  
+  # calculate counts for specific conditions
+  cond_counts <- cond_data |>
+    dplyr::summarise(across(everything(), sum, na.rm = TRUE)) |>
+    tidyr::pivot_longer(everything(), names_to = "condition", values_to = "n") |>
+    dplyr::mutate(
+      condition = str_remove(condition, paste0(prefix, "_conditions_")),
+      condition = str_to_title(str_replace_all(condition, "_", " ")),
+      percent = n/nrow(data_params)*100,
+      display = sprintf("%d (%.1f%%)", n, percent)
+    )
+  
+  # return both total and specific counts
+  list(
+    total = sum(data_params[[paste0(prefix, "_conditions")]], na.rm = TRUE),
+    conditions = cond_counts
+  )
+}
+
+# process neurological condition data
+neuro_data <- process_conditions("neuro", "Neurological Conditions") 
+# rename conditions 
+neuro_data$conditions %<>%
+  dplyr::mutate(condition = case_when(condition == "Ms" ~ "Multiple sclerosis",
+                               condition == "Tbi" ~ "Traumatic brain injury",
+                               condition == "Headache" ~ "Headache disorder",
+                               condition == "Parkinsons" ~ "Parkinson's disease",
+                               TRUE ~ condition))
+
+# process mental/neurodev condition data
+mh_data <- process_conditions("mh", "Mental Health Conditions")
+mh_data$conditions %<>%
+  dplyr::mutate(condition = case_when(
+    condition == "Mdd" ~ "Major depressive disorder",
+    condition == "Gad" ~ "Generalised anxiety disorder",
+    condition == "Ocd" ~ "Obsessive compulsive disorder",
+    condition == "Bipolar" ~ "Bipolar disorder",
+    TRUE ~ condition,
+  ))
+
+# create conditions table
+health_table <- bind_rows(
+  # neurological conditions
+  tibble(
+    Condition = "Neurological Conditions",
+    `n (%)` = sprintf("%d (%.1f%%)", neuro_data$total, neuro_data$total/nrow(data_params)*100)
+  ),
+  # populate the table
+  neuro_data$conditions |> dplyr::mutate(Condition = paste0("  ", condition)) |> dplyr::select(Condition, `n (%)` = display),
+  
+  # mental and neurodevelopmental conditions
+  tibble(
+    Condition = "Mental Health and Neurodevelopmental Conditions",
+    `n (%)` = sprintf("%d (%.1f%%)", mh_data$total, mh_data$total/nrow(data_params)*100)
+  ),
+  # populate the table
+  mh_data$conditions |> dplyr::mutate(Condition = paste0("  ", condition)) |> dplyr::select(Condition, `n (%)` = display)
+) |>
+  gt() |>
+  tab_header(
+    title = md("**Table 2**"),
+    subtitle = "Reported Health Conditions"
+  ) |>
+  # formatting across rows 
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(rows = !str_starts(Condition, "  "))
+  ) |>
+  tab_style(
+    style = cell_borders(sides = "bottom", weight = px(1), color = "black"),
+    locations = cells_body(rows = !str_starts(Condition, "  "))
+  ) |>
+  # indent subcategories
+  tab_style(
+    style = cell_text(indent = px(20)),
+    locations = cells_body(columns = Condition, rows = str_starts(Condition, "  "))
+  ) |>
+  # align columns
+  cols_align("left", columns = Condition) |>
+  cols_align("right", columns = `n (%)`) |>
+  # format APA-inspired
+  tab_options(
+    table.width = pct(85),
+    table.font.names = "Arial",
+    heading.title.font.size = px(10),    
+    heading.title.font.weight = "bold",  
+    heading.subtitle.font.size = px(10), 
+    heading.subtitle.font.weight = "normal", 
+    column_labels.hidden = TRUE,
+    table.border.top.style = "none",
+    table.border.bottom.style = "none",
+    data_row.padding = px(4),
+    source_notes.font.size = px(10)
+  ) |>
+  tab_source_note(
+    source_note = paste("Note. N =", nrow(data_params), "; participants could report multiple conditions.")
+  )
+
+# print table
+health_table
+```
+
+None of the included participants reported having any neurological condition, and 9 (9.2%) of participants reported lifetime diagnosis of a mental health or neurodevelopmental condition.
+
+# Validation
+
+## Posterior Predictive Model Performance
+
+Posterior predictive performance for TikTok and Netflix model fit.
+
+```{r}
+#| label: fig-ppcs
+#| fig-cap: "Posterior predictive checks for TikTok and Netflix model fits. A = TikTok, B = Netflix."
+#| fig-align: center
+#| fig-subcap:
+#|   - "TikTok posterior predictive check"
+#|   - "Netflix posterior predictive check"
+#| layout-ncol: 2
+#| out-width: "95%"
+
+# Check if model outputs exist
+model_outputs_exist <- all(
+  file.exists(here::here("output", "figures", "experiment1", "ppc_plot_tiktok.png")),
+  file.exists(here::here("output", "figures", "experiment1", "ppc_plot_netflix.png"))
+)
+
+if (model_outputs_exist) {
+  # Display TikTok PPC plot
+  knitr::include_graphics(here::here("output", "figures", "experiment1", "ppc_plot_tiktok.png"))
+  
+  # Display Netflix PPC plot
+  knitr::include_graphics(here::here("output", "figures", "experiment1","ppc_plot_netflix.png"))
+} else {
+  cat("## Model Outputs Required\n\n")
+  cat("The posterior predictive check plots are not available because the modeling script hasn't been run.\n\n")
+  cat("**To generate these plots:**\n\n")
+  cat("1. Run the modeling script: `source('code/modelcomparison.R')`\n")
+  cat("2. Re-knit this document to see the results\n\n")
+  cat("This will create the necessary model outputs and posterior predictions.\n")
+}
+```
+
+## Assumption checks
+
+Examine the assumptions of statistical tests and apply transformation for meaningful interpretation of data.
+
+```{r}
+#| label: assumption1
+
+# assumption 1: No outliers in the difference between the groups
+data_params |>
+  dplyr::mutate(wl_difference = wl_tiktok - wl_netflix) |>
+  dplyr::select(wl_difference) |>
+  rstatix::identify_outliers()
+```
+
+```{r}
+#| label: fig-box-wantlike
+#| fig-cap: "Boxplot for wanting-liking difference between conditions"
+#| fig-align: left
+#| out-width: "95%"
+
+data_params |>
+  dplyr::mutate(wl_difference = wl_tiktok - wl_netflix) |>
+  ggplot2::ggplot(aes(x = wl_difference)) +
+  geom_boxplot()
+
+```
+
+@fig-box-wantlike illustrates the few outliers in the group difference.
+
+```{r}
+#| label: assumption2
+
+# assumption 2: Normal distribution of the difference pairs (Shapiro-Wilk test)
+data_params |>
+  dplyr::mutate(wl_difference = wl_tiktok - wl_netflix) |>
+  rstatix::shapiro_test(wl_difference)
+```
+
+The Shapiro-wilk test is non-significant, indicating that the distribution of the wanting-liking difference pairs (between TikTok and Netflix condition) approximates normal.
+
+To further examine this, I visualise the QQ-plots for the wanting-liking difference for each condition separately.
+
+```{r}
+#| label: fig-qq-comparison
+#| fig-cap: "QQ-plots for TikTok and Netflix"
+#| layout-ncol: 2
+#| out-width: "95%"
+#| fig-subcap: 
+#|   - "TikTok QQ-plot"
+#|   - "Netflix QQ-plot"
+
+p1 <- ggpubr::ggqqplot(data_params, x = "wl_tiktok") + 
+  ggtitle("TikTok") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+p2 <- ggpubr::ggqqplot(data_params, x = "wl_netflix") + 
+  ggtitle("Netflix") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+p1 + p2
+```
+
+@fig-qq-comparison QQ-plots indicate that the distribution of wanting-liking differences for both conditions are more narrow than that of a normal distribution. These deviations do not look substantial enough to warrant transformation of the data.
+
+# Behaviour Analyses
+
+Perform a mixed-effects ANOVA to examine the effect of effort discounting.
+
+```{r}
+#| label: mixed-effects-anova
+
+choice_data <- data$task_data |>
+  dplyr::filter(subj_id %in% data_params$subj_id) |>
+  dplyr::filter(offerReward != 999) |>
+  # acceptance probability per subject, effort level, and reward level
+  dplyr::group_by(subj_id, offerEffort, offerReward) |>
+  dplyr::summarise(mean_choice = mean(choice))
+
+anova(nlme::lme(mean_choice ~ offerEffort * offerReward, random= ~1|subj_id, data = choice_data))
+```
+
+The mixed-effects ANOVA confirms a main effect of effort and reward, as well as the interaction between the two on acceptance probabilities.
+
+```{r}
+#| label: task-accepted-sucess-rate
+
+# rate of accepted challenges
+data$task_data |> 
+  dplyr::filter(phase == "game") |> 
+  # accepted trials
+  dplyr::filter(choice == 1) |> 
+  group_by(subj_id) |> 
+  reframe(prop_accept = n() / 128) |> 
+  reframe(mean_prop_accept = mean(prop_accept)*100, 
+          sd_prop_accept = sd(prop_accept)*100, 
+          min_prop_accept = min(prop_accept), 
+          max_prop_accept = max(prop_accept))
+
+# successrate of accepted challenges
+p_succ <- data$task_data |> 
+  dplyr::filter(phase == "game") |> 
+  # accepted trials
+  dplyr::filter(choice == 1) |> 
+  group_by(subj_id) |> 
+  reframe(prop_success = sum((goalClicks - clicks) <= 0) / n()) |> 
+  reframe(mean_prop_sucess = mean(prop_success)*100, 
+          sd_prop_sucess = sd(prop_success)*100)
+```
+
+The modeling procedure utilises all trials without regard for the fact whether participants accept trials that they end up failing. A look at the data reveals that participants fail close to no offers that they accept: `r sprintf("%.3f", p_succ[1])`
+
+We can also look at the acceptance rates for each of the two conditions.
+
+```{r}
+#| label: trial-behaviour
+
+# Netflix condition
+netflix_results <- data$task_data |> 
+  dplyr::filter(phase == "game") |> 
+  dplyr::filter(stringr::str_detect(session_id, "netflix")) |> 
+  # accepted trials
+  dplyr::filter(choice == 1) |> 
+  group_by(subj_id) |> 
+  reframe(prop_accept = n() / 64) |> 
+  reframe(
+    condition = "Netflix",
+    mean_prop_accept = mean(prop_accept) * 100, 
+    sd_prop_accept = sd(prop_accept) * 100, 
+    min_prop_accept = min(prop_accept) * 100, 
+    max_prop_accept = max(prop_accept) * 100
+  )
+
+# TikTok condition
+tiktok_results <- data$task_data |> 
+  dplyr::filter(phase == "game") |> 
+  dplyr::filter(stringr::str_detect(session_id, "tiktok")) |> 
+  # accepted trials
+  dplyr::filter(choice == 1) |> 
+  group_by(subj_id) |> 
+  reframe(prop_accept = n() / 64) |> 
+  reframe(
+    condition = "TikTok",
+    mean_prop_accept = mean(prop_accept) * 100, 
+    sd_prop_accept = sd(prop_accept) * 100, 
+    min_prop_accept = min(prop_accept) * 100, 
+    max_prop_accept = max(prop_accept) * 100
+  )
+
+# combine results
+combined_results <- dplyr::bind_rows(netflix_results, tiktok_results)
+
+# print with formatting
+combined_results |> 
+  dplyr::mutate(
+    dplyr::across(mean_prop_accept:max_prop_accept, ~ round(., 2))
+  ) |> 
+  dplyr::select(
+    Condition = condition,
+    `Mean (%)` = mean_prop_accept,
+    `SD (%)` = sd_prop_accept,
+    `Min (%)` = min_prop_accept,
+    `Max (%)` = max_prop_accept
+  )
+```
+
+Beyond the above description, let's test this formally.
+
+```{r}
+#| label: acceptance-bayestest
+
+# calculate acceptance proportions per participant
+acceptance_props <- data$task_data |> 
+  dplyr::filter(phase == "game") |> 
+  dplyr::filter(stringr::str_detect(session_id, "netflix|tiktok")) |> 
+  dplyr::filter(choice == 1) |> 
+  dplyr::mutate(
+    condition = dplyr::case_when(
+      stringr::str_detect(session_id, "netflix") ~ "netflix",
+      stringr::str_detect(session_id, "tiktok") ~ "tiktok"
+    )
+  ) |>
+  dplyr::group_by(subj_id, condition) |>
+  dplyr::summarise(prop_accept = n() / 64, .groups = "drop") |> 
+  tidyr::pivot_wider(
+    names_from = condition,
+    values_from = prop_accept,
+    names_prefix = "prop_"
+  )
+
+# calculate means for reporting
+netflix_mean <- mean(acceptance_props$prop_netflix, na.rm = TRUE) * 100
+tiktok_mean <- mean(acceptance_props$prop_tiktok, na.rm = TRUE) * 100
+
+# Bayesian paired t-test
+bf_result <- ttestBF(
+  x = acceptance_props$prop_netflix,
+  y = acceptance_props$prop_tiktok,
+  paired = TRUE,
+  rscale = "medium"  # Cauchy prior width (medium = sqrt(2)/2 ≈ 0.707)
+)
+
+# Extract results
+bf_value <- extractBF(bf_result)[1, "bf"]
+bf_value
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(bf_result, iterations = 10000)
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+```
+
+The ***BF10*** **of `r round(bf_value, 3)`** indicates strong support for the null hypothesis that acceptance rates did not differ between the TikTok and Netflix conditions within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: plot-task-descriptives
+
+# accepted challenges plot
+acceptance_plot <- task_plot(data$task_data, 
+                             main_title = "", 
+                             plot_type = "line_plot",
+                             arrange_cols = 0, arrange_rows = 0) +
+  labs(x = "Effort level", y = "Acceptance probability (SE)") +
+  theme_custom()
+
+acceptance_plot
+
+# save rds
+saveRDS(acceptance_plot, here::here("output", "rds", "gg_taskbehaviour_exp1.rds"))
+
+# save ggplot
+ggsave(
+  acceptance_plot,
+  filename = here::here("output", "figures", "experiment1", "task_behaviour.png"),
+  width = 7,
+  height = 5,
+  dpi = 800,
+  background = "white"
+)
+```
+
+```{r}
+#| label: fig-acceptance-bar
+#| fig-cap: "Acceptance proportion by effort level for each reward level (bar plots)"
+#| fig-width: 8
+#| fig-height: 6
+
+# bar plots arranged in a 2x2 grid, one panel per reward level
+acceptance_bar <- task_plot(
+  data$task_data,
+  main_title = "", 
+  plot_type = "bar_plot",
+  arrange_cols = 2, 
+  arrange_rows = 2
+)
+
+print(acceptance_bar)
+
+saveRDS(acceptance_bar, here::here("output", "rds", "gg_taskbehaviour_exp1_bar.rds"))
+
+ggsave(
+  acceptance_bar,
+  filename = here::here("output", "figures", "experiment1", "task_behaviour_bar.png"),
+  width = 8,
+  height = 6,
+  dpi = 800,
+  background = "white"
+)
+```
+
+# Main Analyses
+
+## Hypothesis 1
+
+*Hypothesis 1:* *Wanting* (acceptance bias parameter) is higher for TikTok than for Netflix.
+
+Below, I perform a Bayesian paired samples t-test on the choice bias parameter (a), testing for differences between the TikTok and Netflix condition within subject.
+
+```{r}
+#| label: hypothesis1
+
+# Bayesian paired samples t-test
+tbf <- BayesFactor::ttestBF(
+  data_params$a_tiktok,
+  data_params$a_netflix,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation_med <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates moderate support for the null hypothesis that *wanting* is the same for the TikTok and Netflix conditions within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`, with a median estimate of `r sprintf("%.3f", estimated_correlation_med)`.
+
+```{r}
+#| label: fig-params-want
+#| fig-cap: "Distribution of wanting parameter (a)"
+#| fig-align: center
+#| out-width: "95%"
+
+# wanting (a) distribution 
+medians_want <- data_params |>
+  tidyr::pivot_longer(cols = c(a_tiktok, a_netflix),
+               names_to = "condition",
+               values_to = "liking") |>
+  dplyr::group_by(condition) |>
+  dplyr::summarise(median_val = median(liking, na.rm = TRUE))
+
+p_w_dens <- data_params |>
+  tidyr::pivot_longer(
+    cols = c("a_tiktok", "a_netflix"),
+    names_to = "condition",
+    values_to = "acceptance_bias"
+  ) |>
+  ggplot2::ggplot(aes(x = acceptance_bias, group = condition, fill = condition)) +
+    ggplot2::geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  ggdist::stat_interval(
+    aes(y = -0.02, colour = condition),
+    position = position_dodge(width = 0.02),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.3,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = medians_want,
+    aes(x = median_val, y = -0.02, fill = condition, colour = condition),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.02, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  labs(x = "Wanting (TikTok)", y = "Wanting (Netflix)") +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", labels = c("a_tiktok" = "TikTok", "a_netflix" = "Netflix"), begin = 0.3, end = 0.7) +
+  scale_colour_viridis_d(option = "magma", labels = c("a_tiktok" = "TikTok", "a_netflix" = "Netflix"), begin = 0.3, end = 0.7) +
+  theme_custom() +
+  scale_x_continuous(limits = c(-3.5, 6.5), breaks = seq(-3,6,3)) +
+  scale_y_continuous(limits = c(-0.025, .25), breaks = seq(0, 0.25, 0.05)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) +
+  labs(x = "Wanting (α)", y = "Density", fill = "Condition")
+
+# liking (strap-r) distribution
+medians_like <- data_params |>
+  tidyr::pivot_longer(cols = c(strap_tiktok_avg, strap_netflix_avg),
+               names_to = "condition",
+               values_to = "liking") |>
+  dplyr::group_by(condition) |>
+  dplyr::summarise(median_val = median(liking, na.rm = TRUE))
+
+p_l_dens <- data_params |>
+  tidyr::pivot_longer(
+    cols = c("strap_tiktok_avg", "strap_netflix_avg"),
+    names_to = "condition",
+    values_to = "liking"
+  ) |>
+  ggplot2::ggplot(aes(x = liking, group = condition, fill = condition)) +
+  ggplot2::geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  ggdist::stat_interval(
+    aes(y = -0.05, colour = condition),
+    position = position_dodge(width = 0.085),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.3,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = medians_like,
+    aes(x = median_val, y = -0.05, fill = condition, colour = condition),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.085, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  labs(x = "Liking (TikTok)", y = "Liking (Netflix)") +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", labels = c("strap_tiktok_avg" = "TikTok", "strap_netflix_avg" = "Netflix"), begin = 0.3, end = 0.7) +
+  scale_colour_viridis_d(option = "magma", labels = c("strap_tiktok_avg" = "TikTok", "strap_netflix_avg" = "Netflix"), begin = 0.3, end = 0.7) +
+  labs(x = "Liking", y = "", fill = "Condition") +
+  theme_custom() +
+  scale_x_continuous(limits = c(2, 7), breaks = seq(2,7,1)) +
+  scale_y_continuous(limits = c(-0.1, NA), breaks = seq(0, 0.9, 0.3)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) +
+  labs(x = "Self-reported Liking", y = "Density", fill = "Condition")
+
+p_wl_dens <- ggpubr::ggarrange(
+  p_w_dens, p_l_dens,
+  ncol = 2,
+  labels = c("A", "B"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+saveRDS(p_l_dens, file = here::here("output", "rds", "gg_liking_exp1.rds"))
+saveRDS(p_w_dens, file = here::here("output", "rds", "gg_wanting_exp1.rds"))
+saveRDS(p_wl_dens, file = here::here("output", "rds", "gg_wantingliking_exp1.rds"))
+
+ggsave(plot = p_wl_dens, filename = "density_wantingliking.png", device = "png", path = here::here("output", "figures", "experiment1"), dpi = 800, bg = "white")
+
+print(p_wl_dens)
+```
+
+As shown in @fig-params-want, the distributions of the wanting parameter show large overlap between the TikTok and Netflix conditions. For self-reported liking, as demonstrated in panel B, Netflix was rated substantially higher on average.
+
+The prior and posterior distributions for the Bayesian paired samples t-test on the wanting parameter are visualised below, and demonstrate the change in belief with regard to the effect of condition on wanting (a) after observing the data. The prior distribution is a Cauchy distribution with a scale of 1/3.
+
+```{r}
+#| label: fig-h1-prior
+#| fig-cap: "Prior and posterior distributions for the effect of condition on wanting (a) for Hypothesis 1"
+#| fig-align: center
+#| out-width: "95%"
+
+# draw posterior samples
+posterior_samples_h1 <- posterior(tbf, iterations = 10000)
+
+# extract delta standaridsed effect size
+delta_samples_h1 <- posterior_samples_h1[, "delta"]
+
+# Plot prior and posterior distributions for Hypothesis 1
+delta_range <- seq(-3, 3, length.out = 1000)
+prior_density <- dcauchy(delta_range, location = 0, scale = 1/3)
+
+plot_data <- data.frame(
+  delta = delta_range,
+  prior = prior_density
+)
+
+ggplot_h1 <- ggplot() +
+  # posterior
+  geom_density(data = data.frame(delta = delta_samples_h1),
+               aes(x = delta_samples_h1, fill = "Posterior"), 
+               alpha = 0.7,
+               colour = NA) +
+  # prior
+  geom_line(data = plot_data,
+            aes(x = delta, y = prior, color = "Prior"),
+            linewidth = 1, linetype = "dashed") +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL) +
+  scale_colour_viridis_d(option = "magma", begin = 0.9, end = 0.8, name = NULL, direction = -1) +
+  labs(x = "Effect size (δ)", 
+       y = "Density",
+       title = "") + 
+  scale_x_continuous(limits = c(-1,1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, .925),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+
+print(ggplot_h1)
+
+ggsave(
+  filename = here::here("output", "figures", "experiment1", "analyses", "fig-h1-prior-posterior.png"),
+  plot = ggplot_h1, width = 8, height = 6, dpi = 800, bg = "white"
+)
+```
+
+@fig-h1-prior presents the prior to posterior distributions for the effect of condition on wanting (a) for Hypothesis 1. The posterior distribution shows a shift towards zero, indicating that the data provide evidence in favor of the null hypothesis of no difference in wanting between conditions. The prior distribution is wider, reflecting more uncertainty about the effect size before observing the data, while the posterior is more concentrated around zero, reflecting increased certainty about the lack of an effect after observing the data.
+
+### Hypothesis 1 explore
+
+We explore individual-level variation below, specifically examining whether liking and wanting ratings show variation within individuals.
+
+```{r}
+#| label: fig-distr
+#| fig-cap: "Subject liking estimates"
+#| fig-align: center
+#| out-width: "95%"
+
+p_like <- data_params |> ggplot2::ggplot(aes(x = strap_tiktok_avg, y = strap_netflix_avg)) + 
+  geom_point() + 
+  geom_abline() +
+  theme_bw() +
+  labs(
+    x = "TikTok liking", 
+    y = "Netflix liking"
+  ) +
+  theme_custom() + 
+  scale_x_continuous(limits = c(1, 7), breaks = 1:7) +
+  scale_y_continuous(limits = c(1,7), breaks = 1:7)
+
+p_want <- data_params |> ggplot(aes(x = a_tiktok, y = a_netflix)) + 
+  geom_point() + 
+  geom_abline() +
+  theme_bw() +
+  labs(
+    x = "TikTok wanting", 
+    y = "Netflix wanting"
+  ) +
+  theme_custom() + 
+  scale_x_continuous(limits = c(-4, 6.5), breaks = -4:6) +
+  scale_y_continuous(limits = c(-4,6.6), breaks = -4:6)
+
+combined_plot <- ggpubr::ggarrange(
+  p_like, p_want,
+  ncol = 2,
+  labels = c("A", "B"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+print(combined_plot)
+```
+
+@fig-distr illustrates the liking and wanting values for TikTok and Netflix for individual participants. Deviations from the identity line indicate differences between the two conditions.
+
+We proceed to statistically examine the above variation in liking between the two conditions. We perform a bayesian paired t-test on the liking ratings for the TikTok and Netflix conditions, testing for differences within subjects.
+
+```{r}
+#| label: bfttest-liking
+
+# Bayesian paired samples t-test
+tbf <- BayesFactor::ttestBF(
+  data_params$strap_tiktok_avg,
+  data_params$strap_netflix_avg,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates extreme support for the alternative hypothesis that *liking* is different for the TikTok and Netflix conditions. The median standardised effect size (δ) is **`r sprintf("%.3f", estimated_correlation)`**. The *95% Credible Interval* of the group difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+#### Liking measurement stability or trajectories
+
+Liking was assessed using a single-item self-report measure implemented three times throughout the waiting period. It is plausible that liking ratings may show variation across the three measurement occasions. To explore this, we visualise the trajectories of TikTok liking ratings across the three measurement occasions for each participant and condition.
+
+```{r}
+#| label: fig-distr-subj
+#| fig-cap: "Subject liking estimates"
+#| fig-align: center
+#| out-width: "95%"
+
+trajectory_data <- data_params |>
+  dplyr::select(subj_id, strap_tiktok_1, strap_tiktok_2, strap_tiktok_3) |>
+  tidyr::pivot_longer(cols = starts_with("strap_tiktok"), 
+               names_to = "time_point", 
+               values_to = "strap_score") |>
+  dplyr::mutate(time_point = case_when(
+    time_point == "strap_tiktok_1" ~ 1,
+    time_point == "strap_tiktok_2" ~ 2,
+    time_point == "strap_tiktok_3" ~ 3
+  ))
+
+# create the trajectory plot
+trajectory_plot <- ggplot(trajectory_data, aes(x = time_point, y = strap_score, group = subj_id, color = subj_id)) +
+  geom_line(alpha = 0.3) +
+  geom_point(alpha = 0.4, size = 0.8) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, 
+              color = "gray15", fill = "gray30", linewidth = 1.2) +
+  scale_color_viridis_c(option = "magma", begin = 0.1, end = 0.9, guide = "none") +
+  scale_x_continuous(breaks = c(1, 2, 3), 
+                     labels = c("Time 1", "Time 2", "Time 3")) +
+  labs(x = "Measurement Occasion",
+       y = "Liking") +
+  theme_minimal() +
+  theme_custom() + 
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 11, color = "gray60"),
+        panel.grid.minor = element_blank())
+
+print(trajectory_plot)
+```
+
+@fig-distr-subj shows variation across mesurement occasions but no systematic trends or drifts that would suggest taking an average of the three liking measures would mask interesting variation in subsequent analyses.
+
+#### Within-subject trajectories of wanting across conditions
+
+Similar to liking, we examine individual variation in differences of wanting between the TikTok and Netflix condition.
+
+```{r}
+#| label: fig-a-within
+#| fig-cap: "Wanting within subjects"
+#| out-width: "95%"
+
+data_with_slopes <- data_params |> 
+  tidyr::pivot_longer(cols = c(a_tiktok, a_netflix), names_to = "conditions1", values_to = "values") |>
+  dplyr::mutate(conditions1_numeric = ifelse(conditions1 == "a_tiktok", 0, 1)) |>
+  dplyr::group_by(subj_id) |>
+  dplyr::summarise(
+    slope = ifelse(n() > 1, 
+                   (values[conditions1_numeric == 1] - values[conditions1_numeric == 0]) / 
+                   (1 - 0), 
+                   0),
+    .groups = "drop"
+  ) |>
+  right_join(
+    data_params |> 
+      pivot_longer(cols = c(a_tiktok, a_netflix), names_to = "conditions1", values_to = "values"),
+    by = "subj_id"
+  ) 
+
+# Create the plot with slope-based coloring (positive vs negative)
+data_with_slopes |>
+  dplyr::mutate(slope_direction = ifelse(slope > 0, "Negative", "Positive")) |>
+  ggplot2::ggplot(aes(y = values, x = conditions1, colour = slope_direction)) + 
+  geom_point() + 
+  geom_line(aes(group = subj_id)) + 
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = "Slope") +
+  scale_x_discrete(name = "Condition", labels = c("Netflix", "TikTok")) + 
+  scale_y_continuous(name = "Wanting") +
+  theme_bw() +
+  theme_custom() 
+```
+
+@fig-a-within illustrates the estimated wanting parameter within individuals to examine whether we can observe within-subject variation in wanting with respect to the two platforms, as opposed to measuring more trait-like motivational tendencies across contexts.
+
+## Hypothesis 2
+
+*Hypothesis 2:* The dissociation of *wanting* (acceptance bias parameter) and *liking* (momentary self-report) is higher for TikTok than for Netflix.
+
+I perform a Bayesian paired samples t-test on the wanting-liking difference, testing for differences between the TikTok and Netflix condition within subjects.
+
+```{r}
+#|label: hypothesis2
+
+# Bayesian paired t-test
+tbf_diff <- BayesFactor::ttestBF(
+  data_params$wl_tiktok,
+  data_params$wl_netflix,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf <- exp(tbf_diff@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_diff, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf)`** indicates very strong support in favour of the alternative hypothesis, that the wanting-liking difference is larger for TikTok than Netflix. The median standardised effect size (δ) is **`r sprintf("%.3f", estimated_correlation)`**. The *95% Credible Interval* of the group difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: fig-params-wantlike
+#| fig-cap: "Distribution of wanting-liking difference"
+#| fig-align: center
+#| out-width: "95%"
+
+# wanting-liking distribution
+medians <- data_params |>
+  tidyr::pivot_longer(cols = c(wl_tiktok_z, wl_netflix_z),
+               names_to = "condition",
+               values_to = "want_like_difference") |>
+  dplyr::group_by(condition) |>
+  dplyr::summarise(median_val = median(want_like_difference, na.rm = TRUE))
+
+p_wl_diff_dens <- data_params |>
+  tidyr::pivot_longer(
+    cols = c("wl_tiktok_z", "wl_netflix_z"),
+    names_to = "condition",
+    values_to = "want_like_difference"
+  ) |>
+  ggplot2::ggplot(aes(x = want_like_difference, group = condition, fill = condition)) +
+  ggplot2::geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  ggdist::stat_interval(
+    aes(y = -0.025, colour = condition),
+    position = position_dodge(width = 0.04),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.4,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = medians,
+    aes(x = median_val, y = -0.025, fill = condition, colour = condition),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.04, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", labels = c("wl_tiktok_z" = "TikTok", "wl_netflix_z" = "Netflix"), begin = 0.3, end = 0.7 ) +
+  scale_colour_viridis_d(option = "magma", labels = c("wl_tiktok_z" = "TikTok", "wl_netflix_z" = "Netflix"), begin = 0.3, end = 0.7) +
+  theme_custom() +
+  scale_x_continuous(limits = c(NA, NA), breaks = seq(-4,4,1)) +
+  scale_y_continuous(limits = c(-0.05, 0.45), breaks = seq(0, 0.4, 0.1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) +
+  labs(x = "Wanting-liking dissocation (z)", y = "Density", fill = "Condition")
+
+saveRDS(p_wl_diff_dens, file = here::here("output", "rds", "gg_wantlike_exp1.rds"))
+
+p_param_dens <- ggpubr::ggarrange(
+  p_w_dens, p_l_dens, p_wl_diff_dens,
+  ncol = 3, nrow = 1,
+  labels = c("A", "B", "C"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+ggsave(plot = p_param_dens, filename = "density_wanting_liking.png", device = "png", path = here::here("output", "figures", "experiment1"), dpi = 800, width = 10, height = 5, bg = "white")
+
+print(p_wl_diff_dens)
+```
+
+@fig-params-wantlike illustrates the distribution of the *wanting-liking dissociation* for the TikTok and Netflix conditions. For interpretation purposes, we show the z-transformed difference scores. A larger value of the *wanting-liking dissociation* indicates higher wanting relative to liking, and a lower score indicates less dissociation or higher liking relative to wanting.
+
+We present the prior and posterior distributions for the Bayesian paired samples t-test on the wanting-liking difference, demonstrating the change in belief with regard to the effect of condition on the wanting-liking dissociation after observing the data. The prior distribution is a Cauchy distribution with a scale of 1/3.
+
+```{r}
+#| label: fig-h2-prior
+
+# draw posterior samples
+posterior_samples_h2 <- posterior(tbf_diff, iterations = 10000)
+
+# extract delta standaridsed effect size
+delta_samples_h2 <- posterior_samples_h2[, "delta"]
+
+# Plot prior and posterior distributions for Hypothesis 1
+delta_range <- seq(-3, 3, length.out = 1000)
+prior_density <- dcauchy(delta_range, location = 0, scale = 1/3)
+
+plot_data <- data.frame(
+  delta = delta_range,
+  prior = prior_density
+)
+
+ggplot_h2 <- ggplot() +
+  # Posterior
+  geom_density(data = data.frame(delta = delta_samples_h2),
+               aes(x = delta_samples_h2, fill = "Posterior"), 
+               alpha = 0.7,
+               colour = NA) +
+  # Prior
+  geom_line(data = plot_data,
+            aes(x = delta, y = prior, color = "Prior"),
+            linewidth = 1, linetype = "dashed") +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL) +
+  scale_colour_viridis_d(option = "magma", begin = 0.9, end = 0.8, name = NULL, direction = -1) +
+  labs(x = "Effect size (δ)", 
+       y = "Density",
+       title = "") + 
+  scale_x_continuous(limits = c(-1,1)) +
+  scale_y_continuous(limits = c(0,4)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, .925),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+
+print(ggplot_h2)
+
+ggsave(
+  filename = here::here("output", "figures", "experiment1", "analyses", "fig-h2-prior-posterior.png"),
+  plot = ggplot_h2, width = 8, height = 6, dpi = 800, bg = "white"
+)
+```
+
+#### Hypothesis 2 explore
+
+Below, we examine whether the wanting-liking dissociation is driven by differences in *wanting* or *liking* between the TikTok and Netflix conditions. To this end, I construct a multivariate model that includes condition as a predictor and random intercepts for subjects (to reflect the paired nature of the data).
+
+```{r}
+#| label: multivariate-model
+#| cache: false
+#| warning: false
+#| message: false
+#| output: false
+
+# format data in long
+data_params_long <- data_params |>
+  tidyr::pivot_longer(
+    cols = c(wl_netflix, wl_tiktok, a_netflix, a_tiktok, strap_netflix_avg, strap_tiktok_avg),
+    names_to = c(".value", "condition"),
+    names_sep = "_"
+  )
+
+data_params_long <- data_params_long |>
+  mutate(
+    a_scaled = scale(a),
+    strap_scaled = scale(strap)
+  )
+
+mv_model <- brms::brm(
+  mvbind(a_scaled, strap_scaled) ~ condition + (1|subj_id),
+  data = data_params_long,
+  family = gaussian(),
+  cores = 4,
+  chains = 4,
+  iter = 2000,
+  warmup = 500,
+  control = list(max_treedepth = 15, adapt_delta = 0.95)
+)
+
+# save model parameters for referencing
+model_params <- brms::fixef(mv_model)  # fixed effects
+model_ranef <- brms::VarCorr(mv_model) # random effects
+```
+
+Let's examine the returned estimates, split by random and fixed effects.
+
+**Random Effects:**
+
+*sd(a_Intercept)* = `r sprintf("%.3f", model_ranef$subj_id$sd[[1]])`, with the *95% CI* \[`r sprintf("%.3f", model_ranef$subj_id$sd[[5]])`, `r sprintf("%.3f", model_ranef$subj_id$sd[[7]])`\]. This indicates that there is substantial between-subject variability in *wanting*.
+
+*sd(strap_Intercept)* = `r sprintf("%.3f", model_ranef$subj_id$sd[[2]])`, with the *95% CI* \[`r sprintf("%.3f", model_ranef$subj_id$sd[[6]])`, `r sprintf("%.3f", model_ranef$subj_id$sd[[8]])`\]. This indicates that between-subject variability in *liking* is smaller but present.
+
+**Fixed Effects:**
+
+*a_Intercept* = `r sprintf("%.3f", model_params[[1]])`, with the *95% CI* \[`r sprintf("%.3f", model_params[[9]])`, `r sprintf("%.3f", model_params[[13]])`\]. This quantifies the average estimated *wanting* in the reference condition (Netflix).
+
+*a_conditiontiktok* = `r sprintf("%.3f", model_params[[3]])`, with the *95% CI* \[`r sprintf("%.3f", model_params[[11]])`, `r sprintf("%.3f", model_params[[15]])`\]. The difference in "wanting" for TikTok compared to Netflix. The 95% credible interval includes zero, suggesting no clear evidence of a difference in wanting between platforms.
+
+*stap_conditiontiktok* = `r sprintf("%.3f", model_params[[4]])`, with the *95% CI* \[`r sprintf("%.3f", model_params[[12]])`, `r sprintf("%.3f", model_params[[16]])`\]. The difference in "liking" for TikTok compared to Netflix. The 95% credible interval does not include zero, suggesting a clear difference in liking between platforms.
+
+The estimates are visualised below, and indicate that the *wanting-liking dissociation* is driven by differences in *liking* between the two conditions, and not the *wanting* parameter.
+
+```{r}
+#| label: fig-multivariate-effects
+#| fig-cap: "Effect sumamry of multivariate model"
+#| out-width: "95%"
+#| warning: false
+#| message: false
+
+# extract coefficients
+coef_data <- data.frame(
+  Parameter = c("Wanting (TikTok vs. Netflix)", "Liking (TikTok vs. Netflix)"),
+  Estimate = fixef(mv_model)[3:4, "Estimate"],
+  lower = fixef(mv_model)[3:4, "Q2.5"],
+  upper = fixef(mv_model)[3:4, "Q97.5"]
+)
+
+# Create a forest plot
+ggplot2::ggplot(coef_data, aes(x = Estimate, y = Parameter)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.2) +
+  labs(
+    x = "Effect size",
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_text(size = 11),
+    axis.title = element_text(size = 11)
+  )
+```
+
+@fig-multivariate-effects shows the effect summary of the multivariate model, including the outcomes *wanting* and *liking* and the predictor condition.
+
+## Hypothesis 3
+
+*Hypothesis 3a:* The dissociation between *wanting* (acceptance bias parameter) and *liking* (momentary self-report) of TikTok is related to addiction severity (Bergen Social Media Addiction Scale, TikTok).
+
+I perform a Bayesian correlation using the behavioural proxy of addiction (wanting-liking dissociation) and the self-reported addiction scale values for each participant.
+
+```{r}
+#| label: hypothesis3tiktok
+#| cache: false
+
+# TikTok: Bayesian correlation
+tbf_corr_tiktok <- BayesFactor::correlationBF(
+  data_params$wl_tiktok,
+  data_params$bsmas_tiktok_total,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_tiktok <- exp(tbf_corr_tiktok@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_tiktok, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho
+estimated_correlation <- mean(posterior_samples[, "rho"])
+estimated_correlation_med <- median(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf_tiktok)`** indicates support for the null hypothesis that the TikTok wanting-liking dissociation does not relate to the corresponding self-reported addiction score.
+
+The correlation estimate (median) is **`r sprintf("%.3f", estimated_correlation_med)`**. Given that larger dissociation between wanting and liking are more negative values, one would expect a negative correlation between wanting-liking dissociations and the self-reported addiction measure. The *95% Credible Interval* of this correlation ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+#### Hypothesis 3b: Netflix
+
+*Hypothesis 3b:* The dissociation between *wanting* (acceptance bias parameter) and *liking* (momentary self-report) of Netflix is related to addiction severity (Bergen Social Media Addiction Scale, Netflix).
+
+```{r}
+#| label: hypothesis3netflix
+#| cache: false
+
+# Netflix: Bayesian correlation
+tbf_corr_netflix <- BayesFactor::correlationBF(
+  data_params$wl_netflix,
+  data_params$bsmas_netflix_total,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_netflix <- exp(tbf_corr_netflix@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_netflix, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho
+estimated_correlation <- mean(posterior_samples[, "rho"])
+estimated_correlation_med <- median(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf_netflix)`** indicates inconclusive evidence with respect to the null hypothesis that the Netflix wanting-liking dissociation does not relate to the corresponding BSMAS score.
+
+The correlation estimate of the Bayesian correlation is `r sprintf("%.3f", estimated_correlation_med)`. Given that larger dissociations between wanting and liking are more negative values, one would expect a negative correlation between wanting-liking dissociations and the self-reported addiction measure. The *95% Credible Interval* of this correlation ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: fig-bsmas-wl
+#| fig-cap: "Association between Bergen Social Media Addiction Scale and Want-like dissociation"
+#| fig-align: center
+#| out-width: "95%"
+
+mainplot <- data_params |>
+  # create a longer format dataset that includes both Netflix and TikTok data
+  tidyr::pivot_longer(
+    cols = c(wl_netflix_z, wl_tiktok_z),
+    names_to = "platform_wl",
+    values_to = "want_like"
+  ) |>
+  tidyr::pivot_longer(
+    cols = c(bsmas_netflix_total, bsmas_tiktok_total),
+    names_to = "platform_bsmas",
+    values_to = "bsmas_score"
+  ) |>
+  # only keep matching rows (Netflix with Netflix, TikTok with TikTok)
+  dplyr::filter(
+    (platform_wl == "wl_netflix_z" & platform_bsmas == "bsmas_netflix_total") |
+    (platform_wl == "wl_tiktok_z" & platform_bsmas == "bsmas_tiktok_total")
+  ) |>
+  # create a clean platform variable
+  dplyr::mutate(
+    platform = dplyr::case_when(
+      platform_wl == "wl_netflix_z" ~ "Netflix",
+      platform_wl == "wl_tiktok_z" ~ "TikTok"
+    )
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(y = bsmas_score, x = want_like, color = platform)) +
+ # scatterplot with jitter for visibility
+  geom_jitter(aes(colour = platform),
+    width = 0.45,
+    alpha = 0.85,
+    height = 0.15,
+    size = 2.8,
+    shape = 19,
+    stroke = 0.8
+  ) +
+    # regression line - one per platform
+  geom_smooth(aes(group = platform, color = platform, fill = platform),
+              method = "lm", se = TRUE, show.legend = FALSE,
+              linewidth = 1.2, alpha = 0.25, linetype = "solid") +
+  # Add regression equation - one per platform
+  ggpmisc::stat_poly_eq(
+    aes(group = platform, color = platform,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),  # stagger vertically so they don't overlap
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 5
+  ) +
+  theme_bw() +
+    scale_fill_viridis_d(
+    option = "magma",
+    begin = 0.3,
+    end = 0.7,
+    name = NULL,
+    alpha = 0.4,
+    guide = "none", labels = c("wl_tiktok_z" = "TikTok", "wl_netflix_z" = "Netflix")) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         labels = c("wl_tiktok_z" = "TikTok", "wl_netflix_z" = "Netflix")) +
+  theme_custom() +
+  scale_y_continuous(breaks = seq(5, 30, 5), limits = c(5,30)) +
+  scale_x_continuous(breaks = seq(-3, 4, 1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) +
+  labs(x = "Wanting-Liking dissociation (z)", y = "Self-reported addiction", fill = "Condition")
+
+saveRDS(mainplot, file = here::here("output", "rds", "gg_wlbsmas_exp1.rds"))
+
+# remove legens from individual plots for merging with ggmarginal object
+p_w_dens_no_legend <- p_w_dens + 
+  theme(legend.position = "none") 
+p_l_dens_no_legend <- p_l_dens + 
+  theme(legend.position = "none") 
+p_wl_diff_dens_no_legend <- p_wl_diff_dens + 
+  theme(legend.position = "none") 
+
+# merge plots with ggarrange
+p_param_dens <- ggpubr::ggarrange(
+  p_w_dens_no_legend + labs(title = "Hypothesis 1") , 
+  p_wl_diff_dens_no_legend + labs(title = "Hypothesis 2") + theme(legend.position = "bottom"), 
+  mainplot + labs(title = "Hypothesis 3") + theme(
+    legend.position = "bottom",
+    legend.text = element_blank(),
+    legend.title = element_blank()
+  ) + guides(
+    color = guide_legend(override.aes = list(alpha = 0, size = 0)),
+    fill = guide_legend(override.aes = list(alpha = 0, size = 0))
+  ),
+  ncol = 3, nrow = 1,
+  labels = c("A", "B", "C"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+ggsave(p_param_dens, file = "hypothesis_plots.png", path = here::here("output", "figures", "experiment1"),
+       dpi = 800, width = 18, height = 6, bg = "white")
+
+print(p_param_dens)
+```
+
+@fig-bsmas-wl illustrates the *wanting-liking dissociation* based on z-transformed data as a function of self-reported addiction ratings for TikTok and Netflix.
+
+```{r}
+#| label: fig-h3-prior
+
+# draw posterior samples
+posterior_samples_h3 <- BayesFactor::posterior(tbf_corr_tiktok, iterations = 10000)
+
+# extract delta standaridsed effect size
+rho_samples_h3 <- posterior_samples_h3[, "rho"]
+
+# Plot prior and posterior distributions for Hypothesis 1
+rho_range <- seq(-3, 3, length.out = 1000)
+prior_density <- dcauchy(rho_range, location = 0, scale = 1/sqrt(3))
+
+plot_data <- data.frame(
+  rho = rho_range,
+  prior = prior_density
+)
+
+ggplot_h3 <- ggplot() +
+  # Posterior
+  geom_density(data = data.frame(rho = rho_samples_h3),
+               aes(x = rho_samples_h3, fill = "Posterior"), 
+               alpha = 0.7,
+               colour = NA) +
+  # Prior
+  geom_line(data = plot_data,
+            aes(x = rho, y = prior, color = "Prior"),
+            linewidth = 1, linetype = "dashed") +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL) +
+  scale_colour_viridis_d(option = "magma", begin = 0.9, end = 0.8, name = NULL, direction = -1) +
+  labs(x = "Effect size (ρ)", 
+       y = "Density",
+       title = "") + 
+  scale_x_continuous(limits = c(-1,1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, .925),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+
+print(ggplot_h3)
+
+ggsave(
+  filename = here::here("output", "figures", "experiment1", "analyses", "fig-h3-prior-posterior.png"),
+  plot = ggplot_h3, width = 8, height = 6, dpi = 800, bg = "white"
+)
+
+# save combined plot:
+ggpubr::ggarrange(
+  ggplot_h1 + labs (title = "Hypothesis 1"), 
+  ggplot_h2 + labs (title = "Hypothesis 2"), 
+  ggplot_h3 + labs (title = "Hypothesis 3"),
+  ncol = 3, nrow = 1,
+  labels = c("A", "B", "C"),
+  common.legend = TRUE,
+  legend = "bottom"
+) |> ggsave(
+  filename = here::here("output", "figures", "experiment1", "analyses", "fig-prior-posterior-arranged.png"),
+  width = 18,
+  height = 6,
+  dpi = 600,
+  bg = "white"
+)
+```
+
+### Wanting and self-reported addiction
+
+```{r}
+#| label: explore-wanting-bsmas
+#| cache: false
+
+# Wanting TikTok: Bayesian correlation
+tbf_corr_want <- BayesFactor::correlationBF(
+  data_params$a_tiktok,
+  data_params$bsmas_tiktok_total,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_want <- exp(tbf_corr_want@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_want, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho
+estimated_correlation <- mean(posterior_samples[, "rho"])
+estimated_correlation_med <- median(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The Bayes Factor is ***BF01*** **of `r sprintf("%.3f", bf_want)`**. The 95% Credible Interval of the correlation between the wanting parameter and self-reported addiction scores for TikTok ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`. The correlation estimate (median) is `r sprintf("%.3f", estimated_correlation_med)`.
+
+```{r}
+#| label: fig-bsmas-want
+#| fig-cap: "Association between Bergen Social Media Addiction Scale and Wanting"
+#| fig-align: center
+#| out-width: "95%"
+
+mainplot <- data_params |>
+  # create a longer format dataset that includes both Netflix and TikTok data
+  tidyr::pivot_longer(
+    cols = c(a_netflix, a_tiktok),
+    names_to = "platform_wanting",
+    values_to = "wanting"
+  ) |>
+  tidyr::pivot_longer(
+    cols = c(bsmas_netflix_total, bsmas_tiktok_total),
+    names_to = "platform_bsmas",
+    values_to = "bsmas_score"
+  ) |>
+  # only keep matching rows (Netflix with Netflix, TikTok with TikTok)
+  dplyr::filter(
+    (platform_wanting == "a_netflix" & platform_bsmas == "bsmas_netflix_total") |
+    (platform_wanting == "a_tiktok" & platform_bsmas == "bsmas_tiktok_total")
+  ) |>
+  # create a clean platform variable
+  dplyr::mutate(
+    platform = dplyr::case_when(
+      platform_wanting == "a_netflix" ~ "Netflix",
+      platform_wanting == "a_tiktok" ~ "TikTok"
+    )
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(y = bsmas_score, x = wanting, color = platform)) +
+ # scatterplot with jitter for visibility
+  geom_jitter(aes(colour = platform),
+    width = 0.45,
+    alpha = 0.85,
+    height = 0.15,
+    size = 2.8,
+    shape = 19,
+    stroke = 0.8
+  ) +
+# regression line - one per platform
+  geom_smooth(aes(group = platform, color = platform, fill = platform),
+              method = "lm", se = TRUE, show.legend = FALSE,
+              linewidth = 1.2, alpha = 0.25, linetype = "solid") +
+  # Add regression equation - one per platform
+  ggpmisc::stat_poly_eq(
+    aes(group = platform, color = platform,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),  # stagger vertically so they don't overlap
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 5
+  ) +
+  theme_bw() +
+    scale_fill_viridis_d(
+    option = "magma",
+    begin = 0.3,
+    end = 0.7,
+    name = NULL,
+    alpha = 0.4,
+    guide = "none", labels = c("a_tiktok" = "TikTok", "a_netflix" = "Netflix")) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         labels = c("a_tiktok" = "TikTok", "a_netflix" = "Netflix")) +
+  theme_custom() +
+  scale_y_continuous(breaks = seq(5, 30, 5), limits = c(5,30)) +
+  scale_x_continuous(breaks = seq(-3, 4, 1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.125, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) +
+  labs(x = "Wanting", y = "Self-reported addiction", fill = "Condition")
+
+saveRDS(mainplot, file = here::here("output", "rds", "gg_wantingbsmas_exp1.rds"))
+
+print(mainplot)
+```
+
+# Exploratory Analyses
+
+## Control variables
+
+The above findings indicate that the *wanting-liking dissociation* is more pronounced for TikTok than Netflix. In the below, I examine whether this remains true when accounting for *gender* and *age* of participants.
+
+```{r}
+#| label: h2-control-demo
+#| cache: false
+#| warning: false
+#| message: false
+#| error: false
+#| output: false
+
+# fit Bayesian mixed model with age and sex as covariates
+model_demographic <- brms::brm(
+  wl ~ condition + age + gender + (1|subj_id),
+  data = data_params_long,
+  family = gaussian(),
+  prior = c(
+    prior(normal(0, 5), class = "b"),
+    prior(cauchy(0, 2), class = "sd")
+  ),
+  chains = 4,
+  iter = 10000,
+  warmup = 500,
+  cores = 4,
+  control = list(max_treedepth = 15, adapt_delta = 0.95)
+)
+
+# examine results
+print(summary(model_demographic), digits = 3)
+
+# extract platform effects after controlling for demographics
+posterior_samples <- posterior_samples(model_demographic)
+platform_effect <- posterior_samples$b_conditiontiktok  
+mean_effect <- mean(platform_effect, na.rm = TRUE)
+ci_effect <- quantile(platform_effect, probs = c(0.025, 0.975))
+```
+
+The average platform effect is `r sprintf("%.3f", mean_effect)`, 95% CI \[ `r sprintf("%.3f", ci_effect[1])`, `r sprintf("%.3f", ci_effect[2])`\], when controlling for age and gender. The model indicates no robust effects for age or gender. I visualise this below:
+
+```{r}
+#| label: fig-demographic-effects
+#| fig-cap: "Effects of condition, age, and gender on wanting-liking dissociation"
+#| warning: false
+#| message: false
+#| out-width: "95%"
+
+# extract coefficients
+coef_data <- data.frame(
+  Parameter = c("TikTok (vs Netflix)", "Age (per year)", "Male (vs Female)", "Non-binary (vs Female)"),
+  Estimate = fixef(model_demographic)[2:5, "Estimate"],
+  lower = fixef(model_demographic)[2:5, "Q2.5"],
+  upper = fixef(model_demographic)[2:5, "Q97.5"]
+)
+
+# Create a forest plot
+ggplot2::ggplot(coef_data, aes(x = Estimate, y = Parameter)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.2) +
+  labs(
+    x = "Effect size",
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_text(size = 11),
+    axis.title = element_text(size = 11)
+  )
+```
+
+@fig-demographic-effects shows the effect size of the predictors *condition*, *gender*, and *age*. We do not find differences based on gender or age, whereas condition shows a positive effect, with the dissociation being larger for TikTok than Netflix.
+
+```{r}
+#|label: fig-dem-corr
+#|fig-cap: "Distribution of wanting-liking dissociation across genders"
+
+data_params |>
+  ggplot2::ggplot(aes(x = gender, y = wl_tiktok_z, fill = gender)) +
+  geom_boxplot(alpha = .75) +
+  geom_smooth() +
+  scale_fill_viridis_d(option = "D", begin = .1, end = .7) +
+    labs(
+    x = "Gender",
+    y = "Wanting-liking dissociation (z)"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+@fig-dem-corr illustrates the distribution of wanting-liking difference scores across genders.
+
+### Addiction self-report
+
+The above findings indicate that the wanting-liking dissociation is larger for TikTok than for Netflix. Let's examine the difference between participants ratings on the Bergen TikTok/Netflix Addiction Scale.
+
+```{r}
+#| label: self-report-comparison
+
+# Bayesian paired t-test
+tbf_bsmas <- BayesFactor::ttestBF(
+  data_params$bsmas_tiktok_total,
+  data_params$bsmas_netflix_total,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf <- exp(tbf_bsmas@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_bsmas, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf)`** indicates weak support for the null hypothesis that Bergen self-report addiction scores are the same across the TikTok and Netflix adaptation of the scale. The *95% Credible Interval* of the group difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`. The respective distributions are displayed below.
+
+```{r}
+#| label: fig-difference-bsmas
+#| fig-cap: "Bergen self-report addiction scores for TikTok and Netflix"
+#| fig-align: center
+#| out-width: "95%"
+
+# wanting-liking distribution
+data_params |>
+  tidyr::pivot_longer(
+    cols = c("bsmas_tiktok_total", "bsmas_netflix_total"),
+    names_to = "condition",
+    values_to = "bsmas_total"
+  ) |>
+  dplyr::mutate(condition = as.factor(condition)) |>
+  ggplot2::ggplot(aes(x = bsmas_total, fill = condition)) +
+  ggplot2::geom_density(
+    alpha = .7,
+    show.legend = TRUE, outline.type = "lower", colour = NA
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("bsmas_tiktok_total" = "TikTok", "bsmas_netflix_total" = "Netflix")) +
+  scale_pattern_angle_manual(
+    values = c("bsmas_tiktok_total" = 45, "bsmas_netflix_total" = 90),
+    guide = "none" # remove pattern legend
+  ) +
+  labs(x = "Self-reported social media addiction", y = "Density", fill = "Condition")
+```
+
+@fig-difference-bsmas shows the distribution of self-reported addiction scores for TikTok and Netflix.
+
+### Computational parameters
+
+Examine the correlations between other computational parameters (effort and reward sensitivity) and self-reported addiction measures.
+
+```{r}
+#| label: fig-params-bsmas
+#| fig-cap: "Effort-based decision-making parameters and Bergen Social Media Addiction Scale"
+#| fig-align: center
+#| out-width: "95%"
+
+p_eff <- data_params |>
+  # create a longer format dataset that includes both Netflix and TikTok data
+  tidyr::pivot_longer(
+    cols = c(kE_netflix,kE_tiktok),
+    names_to = "platform_ke",
+    values_to = "effort_sensitivity"
+  ) |>
+  tidyr::pivot_longer(
+    cols = c(bsmas_netflix_total, bsmas_tiktok_total),
+    names_to = "platform_bsmas",
+    values_to = "bsmas_score"
+  ) |>
+  # only keep matching rows (Netflix with Netflix, TikTok with TikTok)
+  dplyr::filter(
+    (platform_ke == "kE_netflix" & platform_bsmas == "bsmas_netflix_total") |
+    (platform_ke == "kE_tiktok" & platform_bsmas == "bsmas_tiktok_total")
+  ) |>
+  # create a clean platform variable
+  dplyr::mutate(
+    platform = dplyr::case_when(
+      platform_ke == "kE_netflix" ~ "Netflix",
+      platform_ke == "kE_tiktok" ~ "TikTok"
+    )
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = bsmas_score, y = effort_sensitivity, color = platform)) +
+  geom_jitter(aes(colour = platform),
+    width = 0.45, alpha = 0.75, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE, linewidth = 1.2, alpha = 0.25, linetype = "solid") +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5) +
+  scale_color_viridis_d(option = "magma", begin = 0.3, end = 0.7) +
+  theme_bw() +
+  labs(
+    x = "Addiction", 
+    y = "Effort sensitivity (kE)",
+    color = "Condition"
+  ) +
+  theme(legend.position = "bottom") +
+  # legend formatting
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "plain"),
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.key = element_rect(fill = "white", color = NA)
+  ) +
+  theme(legend.position="bottom", legend.direction = "horizontal") + 
+  scale_x_continuous(limits = c(5, 30), breaks = seq(5,30,5)) +
+  scale_y_continuous(limits = c(0, 1.25), breaks = seq(0,1.25,.25))
+
+p_rew <- data_params |>
+  tidyr::pivot_longer(
+    cols = c(kR_netflix,kR_tiktok),
+    names_to = "platform_kr",
+    values_to = "reward_sensitivity"
+  ) |>
+  tidyr::pivot_longer(
+    cols = c(bsmas_netflix_total, bsmas_tiktok_total),
+    names_to = "platform_bsmas",
+    values_to = "bsmas_score"
+  ) |>
+  dplyr::filter(
+    (platform_kr == "kR_netflix" & platform_bsmas == "bsmas_netflix_total") |
+    (platform_kr == "kR_tiktok" & platform_bsmas == "bsmas_tiktok_total")
+  ) |>
+  dplyr::mutate(
+    platform = dplyr::case_when(
+      platform_kr == "kR_netflix" ~ "Netflix",
+      platform_kr == "kR_tiktok" ~ "TikTok"
+    )
+  ) |>
+  ggplot2::ggplot(aes(x = bsmas_score, y = reward_sensitivity, color = platform)) +
+  geom_jitter(
+    aes(colour = platform),
+    width = 0.45, alpha = 0.75, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE, linewidth = 1.2, alpha = 0.25, linetype = "solid") +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5) +
+  scale_color_viridis_d(option = "magma", begin = 0.3, end = 0.7) +
+  theme_bw() +
+  labs(
+    x = "Addiction", 
+    y = "Reward sensitivity (kR)",
+    color = "Condition"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(face = "plain"),
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.key = element_rect(fill = "white", color = NA)
+  ) +
+  scale_x_continuous(limits = c(5, 30), breaks = seq(5,30,5)) +
+  scale_y_continuous(limits = c(0, 7), breaks = seq(0,7,1))
+  
+p_a <- data_params |>
+  # create a longer format dataset that includes both Netflix and TikTok data
+  tidyr::pivot_longer(
+    cols = c(a_netflix, a_tiktok),
+    names_to = "platform_a",
+    values_to = "a"
+  ) |>
+  tidyr::pivot_longer(
+    cols = c(bsmas_netflix_total, bsmas_tiktok_total),
+    names_to = "platform_bsmas",
+    values_to = "bsmas_score"
+  ) |>
+  # only keep matching rows (Netflix with Netflix, TikTok with TikTok)
+  dplyr::filter(
+    (platform_a == "a_netflix" & platform_bsmas == "bsmas_netflix_total") |
+    (platform_a == "a_tiktok" & platform_bsmas == "bsmas_tiktok_total")
+  ) |>
+  # create a clean platform variable
+  dplyr::mutate(
+    platform = dplyr::case_when(
+      platform_a == "a_netflix" ~ "Netflix",
+      platform_a == "a_tiktok" ~ "TikTok"
+    )
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = bsmas_score, y = a, color = platform)) +
+  geom_jitter(aes(colour = platform),
+    width = 0.45, alpha = 0.75, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE, linewidth = 1.2, alpha = 0.25, linetype = "solid") +
+    ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5) +
+  scale_color_viridis_d(option = "magma", begin = 0.3, end = 0.7) +
+  theme_bw() +
+  labs(
+    x = "Addiction", 
+    y = "Acceptance bias (α)",
+    color = "Wanting"
+  ) +
+  theme(legend.position = "bottom") +
+  # legend formatting
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "plain"),
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.key = element_rect(fill = "white", color = NA)
+  ) +
+  scale_x_continuous(limits = c(5, 30), breaks = seq(5,30,5)) +
+  scale_y_continuous(limits = c(-3, 7), breaks = seq(-3,7,2))
+
+# remove legend from individual plots
+p_eff_no_legend <- p_eff + theme(legend.position = "none")
+p_rew_no_legend <- p_rew + theme(legend.position = "none")
+p_a_no_legend <- p_a + theme(legend.position = "none")
+
+# extract legend before stripping
+legend <- ggpubr::get_legend(
+  p_eff + theme(legend.position = "bottom", legend.direction = "horizontal")
+)
+
+# remove legend and x axis title
+p_eff_clean <- p_eff + theme(legend.position = "none")
+p_rew_clean <- p_rew + theme(legend.position = "none")
+p_a_clean   <- p_a  + theme(legend.position = "none")
+
+# add marginal density plots
+p_eff_m <- ggMarginal(p_eff_clean, type = "density", groupColour = TRUE, groupFill = TRUE, margins = "y", alpha = .75)
+p_rew_m <- ggMarginal(p_rew_clean, type = "density", groupColour = TRUE, groupFill = TRUE, margins = "y", alpha = .75)
+p_a_m   <- ggMarginal(p_a_clean,   type = "density", groupColour = TRUE, groupFill = TRUE, margins = "y", alpha = .75)
+
+# combine plots
+plots <- cowplot::plot_grid(
+  ggplotify::as.ggplot(p_a_m),
+  ggplotify::as.ggplot(p_rew_m),
+  ggplotify::as.ggplot(p_eff_m),
+  ncol = 3,
+  labels = c("A", "B", "C"),
+  label_fontface = "bold"
+)
+
+# add legend below
+combined_plot <- cowplot::plot_grid(
+  plots,
+  legend,
+  ncol = 1,
+  rel_heights = c(1, 0.08)
+)
+
+ggplot2::ggsave(
+  filename = "parameter_sma_correlations.png", 
+  plot = combined_plot, 
+  path = here::here("output", "figures", "experiment1"),
+  dpi = 600, width = 10, height = 4, bg = "white"
+)
+```
+
+@fig-params-bsmas illustrates the correlations between the different effort-based decision-making parameter estimates and individuals' scores on the Bergen Social Media Addiction Scale (TikTok, Netflix).
+
+#### Condition differences in computational parameters
+
+##### Reward sensitivity
+
+```{r}
+tbf <- BayesFactor::ttestBF(
+  data_params$kR_tiktok,
+  data_params$kR_netflix,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation_med <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+tbf_chains <- BayesFactor::posterior(tbf, iterations = 10000)
+base::summary(tbf_chains)
+plot(tbf_chains[, "delta"])
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates moderate support for the null hypothesis that *reward sensitivity* does not differ between the TikTok and Netflix conditions within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+##### Effort sensitivity
+
+```{r}
+tbf <- BayesFactor::ttestBF(
+  data_params$kE_tiktok,
+  data_params$kE_netflix,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation_med <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+tbf_chains <- BayesFactor::posterior(tbf, iterations = 10000)
+base::summary(tbf_chains)
+plot(tbf_chains[, "delta"])
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates weak support for the null hypothesis that *effort sensitivity* does not differ between the TikTok and Netflix conditions within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: fig-difference-params
+#| fig-cap: "Distributions of effort and reward sensitivity parameters for TikTok and Netflix"
+#| fig-align: center
+#| out-width: "95%"
+
+p_eff <- data_params |>
+  # create a longer format dataset that includes both Netflix and TikTok data
+  tidyr::pivot_longer(
+    cols = c(kE_netflix,kE_tiktok),
+    names_to = "platform_ke",
+    values_to = "effort_sensitivity"
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = effort_sensitivity, fill = platform_ke)) +
+  geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  theme_bw() +
+  scale_fill_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7, name = NULL,
+    labels = c("kE_tiktok" = "TikTok", "kE_netflix" = "Netflix")
+  ) + 
+  scale_x_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  scale_y_continuous(breaks = seq(0,2,.5)) +
+  theme(legend.position="right", legend.direction = "vertical") + 
+  labs(x = "Effort sensitivity", y = "Density", fill = "Condition") 
+
+p_rew <- data_params |>
+  # create a longer format dataset that includes both Netflix and TikTok data
+  tidyr::pivot_longer(
+    cols = c(kR_netflix,kR_tiktok),
+    names_to = "platform_kr",
+    values_to = "reward_sensitivity"
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = reward_sensitivity, fill = platform_kr)) +
+  geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  theme_bw() +
+  scale_fill_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7, name = NULL,
+    labels = c("kR_tiktok" = "TikTok", "kR_netflix" = "Netflix")
+  ) +
+  scale_x_continuous(breaks = seq(0,6,1), limits = c(0, 6)) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,0.6)) +
+  labs(x = "Reward sensitivity", y = "Density", fill = "Condition")
+
+# create combined plot
+combined_plot <- ggpubr::ggarrange(
+  p_rew, p_eff,
+  ncol = 2,
+  labels = c("A", "B"),
+  common.legend = TRUE,
+  legend = "right"
+)
+
+saveRDS(combined_plot, file = here::here("output", "rds", "kekr_parameter_distributions_exp1.rds"))
+
+# save the main plot without legend
+ggplot2::ggsave(
+  filename = "kekr_parameter_distributions.png", 
+  plot = combined_plot, 
+  path = here::here("output", "figures", "experiment1"),
+  dpi = 800, width = 10, height = 5, bg = "white"
+)
+```
+
+## Effort-based decision-making computational parameters
+
+Whereas the main manuscript focused on analyses of the wanting (α) parameter, the other two free parameters reward sensitivity (βr) and effort sensitivity (βe) are furhter examined below.
+
+First, we visualise the correlations between the different parameters and self-reported addiction scores, followed by Bayesian correlation analyses to examine the evidence for associations between these parameters and self-reported addiction.
+
+```{r}
+#| label: fig-params-bsmas-individual
+#| fig-cap: "Correlations between computational parameters and self-reported addiction scores"
+#| fig-align: center
+#| out-width: "95%"
+#| warning: false
+#| message: false
+#| error: false
+
+# extract grouping colours
+group_colours <- viridis::viridis(2, option = "magma", begin = 0.3, end = 0.7)
+
+# acceptance bias TikTok
+ggplot_a_tiktok <- data_params |>
+  ggplot(aes(x = bsmas_tiktok_total, y = a_tiktok)) +
+  geom_jitter(
+    color = group_colours[2],   
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  labs(x = "Self-reported addiction", y = "Wanting (T)") +
+  scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() 
+
+# acceptance bias Netflix
+ggplot_a_netflix <- data_params |>
+  ggplot(aes(x = bsmas_netflix_total, y = a_netflix)) +
+  geom_jitter(
+    color = group_colours[1],  
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  labs(x = "Self-reported addiction", y = "Wanting (N)") +
+  scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom()
+
+# reward sensitivity TikTok
+ggplot_kr_tiktok <- data_params |>
+  ggplot(aes(x = bsmas_tiktok_total, y = kR_tiktok)) +
+  geom_jitter(color = group_colours[2], width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Reward sensitivity (T)") +
+  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 7), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() 
+
+# reward sensitivity Netflix
+ggplot_kr_netflix <- data_params |>
+  ggplot(aes(x = bsmas_netflix_total, y = kR_netflix)) +
+  geom_jitter(color = group_colours[1], width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Reward sensitivity (N)") +
+  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 7), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() 
+
+# effort sensitivity TikTok
+ggplot_ke_tiktok <- data_params |>
+  ggplot(aes(x = bsmas_tiktok_total, y = kE_tiktok)) +
+  geom_jitter(color = group_colours[2], width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Effort sensitivity (T)") +
+  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() 
+
+# reward sensitivity Netflix
+ggplot_ke_netflix <- data_params |>
+  ggplot(aes(x = bsmas_netflix_total, y = kE_netflix)) +
+  geom_jitter(color = group_colours[1],
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Effort sensitivity (N)") +
+  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom()
+
+a_tiktok_m <- ggMarginal(
+  ggplot_a_tiktok + theme(legend.position = "none", axis.title.x = element_blank()),
+  type = "density", groupColour = FALSE, groupFill = FALSE,
+  margins = "y", alpha = 0.9, fill = group_colours[2], colour = NA
+)
+
+a_netflix_m <- ggMarginal(
+  ggplot_a_netflix + theme(legend.position = "none", axis.title.x = element_blank()),
+  type = "density", groupColour = FALSE, groupFill = FALSE,
+  margins = "y", alpha = 0.9, fill = group_colours[1], colour = NA
+)
+
+kr_tiktok_m <- ggMarginal(
+  ggplot_kr_tiktok + theme(legend.position = "none", axis.title.x = element_blank()),
+  type = "density", groupColour = FALSE, groupFill = FALSE,
+  margins = "y", alpha = 0.9, fill = group_colours[2], colour = NA
+)
+
+kr_netflix_m <- ggMarginal(
+  ggplot_kr_netflix + theme(legend.position = "none", axis.title.x = element_blank()),
+  type = "density", groupColour = FALSE, groupFill = FALSE,
+  margins = "y", alpha = 0.9, fill = group_colours[1], colour = NA
+)
+
+ke_tiktok_m <- ggMarginal(
+  ggplot_ke_tiktok + theme(legend.position = "none", axis.title.x = element_blank()),
+  type = "density", groupColour = FALSE, groupFill = FALSE,
+  margins = "y", alpha = 0.9, fill = group_colours[2], colour = NA
+)
+
+ke_netflix_m <- ggMarginal(
+  ggplot_ke_netflix + theme(legend.position = "none", axis.title.x = element_blank()),
+  type = "density", groupColour = FALSE, groupFill = FALSE,
+  margins = "y", alpha = 0.9, fill = group_colours[1], colour = NA
+)
+
+# arrange plots
+plots <- cowplot::plot_grid(
+  ggplotify::as.ggplot(a_tiktok_m),
+  ggplotify::as.ggplot(kr_tiktok_m),
+  ggplotify::as.ggplot(ke_tiktok_m),
+  ggplotify::as.ggplot(a_netflix_m),
+  ggplotify::as.ggplot(kr_netflix_m),
+  ggplotify::as.ggplot(ke_netflix_m),
+  ncol = 3, nrow = 2,
+  labels = c("A", "B", "C", "D", "E", "F"),
+  label_fontface = "bold"
+)
+
+ggsave(
+  filename = "parameter_sma_correlations.png",
+  plot = plots,
+  path = here::here("output", "figures", "experiment1"),
+  dpi = 800, width = 10, height = 5, bg = "white"
+)
+
+plots
+```
+
+Now, we perform the Bayesian correlation analyses with a default stretched beta prior (rscale = 1/3) to examine the evidence for associations between reward and effort sensitivity parameters and self-reported addiction scores.
+
+### Reward sensitivity \~ Social media addiction
+
+```{r}
+#| label: bf-reward-bsmas
+#| cache: false
+#| warning: false
+#| message: false
+
+tbf_corr_rew_tiktok <- BayesFactor::correlationBF(
+  data_params$kR_tiktok,
+  data_params$bsmas_tiktok_total,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_tiktok <- exp(tbf_corr_rew_tiktok@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_rew_tiktok, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho
+estimated_correlation <- mean(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf_tiktok)`** indicates inconclusive evidence. The correlation estimate of the Bayesian correlation (median) is `r sprintf("%.3f", estimated_correlation_med)`. The *95% Credible Interval* of this correlation ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+### Effort sensitivity \~ Social media addiction
+
+```{r}
+#| label: bf-effort-bsmas
+#| cache: false
+#| warning: false
+#| message: false
+
+tbf_corr_eff_tiktok <- BayesFactor::correlationBF(
+  data_params$kE_tiktok,
+  data_params$bsmas_tiktok_total,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_tiktok <- exp(tbf_corr_eff_tiktok@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_eff_tiktok, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho
+estimated_correlation <- mean(posterior_samples[, "rho"])
+estimated_correlation_med <- median(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf_tiktok)`** indicates weak evidence in favour of the null hypothesis that effort sensitivity does not relate to self-reported social media addiction.
+
+The correlation estimate of the Bayesian correlation is `r sprintf("%.3f", estimated_correlation_med)`. The *95% Credible Interval* of this correlation ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+cor_data <- data_params |>
+  dplyr::select(kE_netflix, kE_tiktok, kR_netflix, kR_tiktok, 
+                a_netflix, a_tiktok, bsmas_tiktok_total) |>
+  # Calculate correlation matrix
+  cor(use = "complete.obs")
+
+# Convert to long format for plotting
+cor_long <- cor_data |>
+  as.data.frame() |>
+  tibble::rownames_to_column(var = "var1") |>
+  tidyr::pivot_longer(
+    cols = -var1,
+    names_to = "var2",
+    values_to = "correlation"
+  )
+
+# Create correlation plot
+p_cor <- cor_long |>
+  ggplot2::ggplot(aes(x = var1, y = var2, fill = correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", correlation)), 
+            color = "black", size = 3) +
+  scale_fill_gradient2(
+    low = "#E50914", 
+    mid = "white", 
+    high = "#000000",
+    midpoint = 0,
+    limits = c(-1, 1),
+    name = "Correlation"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  ) +
+  labs(x = "", y = "") +
+  coord_fixed()
+
+# Save plot
+ggplot2::ggsave(
+  filename = "kekr_bsmas_correlations.png", 
+  plot = p_cor, 
+  path = here::here("output", "figures", "experiment1"),
+  dpi = 600, width = 8, height = 7
+)
+```
+
+## Behavioural correlates
+
+The following chunks examine correlations between TikTok-related task performance and behavioural measures. These exploratory analyses are based on the variables introduced in earlier sections, and the additional variables *tiktok_screentime_avg* (objective time spent on TikTok via application settings), *tiktok_checking_frequency* (self-reported checking frequency on a Likert scale), and *tiktok_videos_watched* (objective read-out of number of videos watched during experiment waiting period).
+
+```{r}
+#| label: behaviour-correlate
+#| fig-cap: "Note. p < .05 (*). p < .01 (**), p < .001 (***)"
+#| fig-align: center
+#| out-width: "95%"
+
+cordat <- data_params |>
+  dplyr::select(a_tiktok, kE_tiktok, kR_tiktok, strap_tiktok_avg, wl_tiktok_z,
+         bsmas_tiktok_total, tiktok_screentime_avg, tiktok_checking_frequency, tiktok_videos_watched)
+
+# get the correlation coefficients and the p-values
+corres1 <- cordat |> cor() 
+cor_ps = as.data.frame(ggcorrplot::cor_pmat(cordat))
+  
+# function to get asteriks
+labs.function = function(x){
+  case_when(x >= 0.05 ~ "",
+            x < 0.05 & x >= 0.01 ~ "*",
+            x < 0.01 & x >= 0.001 ~ "**",
+            x < 0.001 ~ "***")
+} 
+
+# extract asteriks based on p-values
+p_labs = cor_ps  |>                      
+  mutate_all(labs.function)
+
+# reshape to match ggcorrplot formatting
+p_labs$Var1 <- as.factor(rownames(p_labs))
+p_labs <- reshape2::melt(p_labs, id.vars = "Var1", variable.name = "Var2", value.name = "lab")
+  
+cor_plot <-  ggcorrplot::ggcorrplot(corres1, hc.order = TRUE, type = "lower",
+                      lab = TRUE)
+
+# subsetting asteriks matrix
+p_labs$in_df <- ifelse(is.na(match(paste0(p_labs$Var1, p_labs$Var2), 
+                                  paste0(cor_plot[["data"]]$Var1, cor_plot[["data"]]$Var2))), "No", "Yes")
+
+p_labs <- dplyr::select(dplyr::filter(p_labs, in_df == "Yes"), -in_df)
+
+# add asteriks to ggcorrplot
+cor_plot_labs = cor_plot + 
+  geom_text(aes(x = p_labs$Var1, 
+                y = p_labs$Var2), 
+            label = p_labs$lab, 
+            nudge_y = 0.25, 
+            size = 4) +
+  scale_fill_gradient2(midpoint = 0, 
+                       limits = c(-1, 1),
+                       low = viridis(1, option = "C"), 
+                       mid = "white", 
+                       high = viridis(1, option = "C", begin = .4),
+                       breaks = seq(-1, 1, by = 0.25),
+                       name = "") +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   hjust = 1, 
+                                   size = 12, 
+                                   color = "black"),
+        axis.text.y = element_text(size = 12, 
+                                   color = "black"),
+        axis.title = element_blank())
+
+print(cor_plot_labs)
+```
+
+@behaviour-correlate illustrates the correlations between our behavioural proxy of addiction and self-reported addiction with a range of behavioural measures on social media.
+
+```{r}
+#| label: questionnaire-correlate
+#| fig-cap: "Note. p < .05 (*). p < .01 (**), p < .001 (***)"
+#| fig-align: center
+#| out-width: "95%"
+
+cordat <- data_params |>
+  dplyr::select(kE_tiktok, kE_netflix, kR_tiktok, kR_netflix, a_tiktok, a_netflix, 
+         wl_tiktok_z, wl_netflix_z, 
+         bsmas_tiktok_total, bsmas_netflix_total,
+         bis_11_total, bis_11_nonplanning, bis_11_nonplanning, bis_11_attention)
+
+# get the correlation coefficients and the p-values
+corres1 <- cordat |> cor() 
+cor_ps = as.data.frame(ggcorrplot::cor_pmat(cordat))
+
+# extract asteriks based on p-values
+p_labs = cor_ps  |>                      
+  mutate_all(labs.function)
+
+# reshape to match ggcorrplot formatting
+p_labs$Var1 <- as.factor(rownames(p_labs))
+p_labs <- reshape2::melt(p_labs, id.vars = "Var1", variable.name = "Var2", value.name = "lab")
+  
+cor_plot <-  ggcorrplot::ggcorrplot(corres1, hc.order = TRUE, type = "lower",
+                      lab = TRUE)
+
+# subsetting asteriks matrix
+p_labs$in_df <- ifelse(is.na(match(paste0(p_labs$Var1, p_labs$Var2), 
+                                  paste0(cor_plot[["data"]]$Var1, cor_plot[["data"]]$Var2))), "No", "Yes")
+
+p_labs <- dplyr::select(dplyr::filter(p_labs, in_df == "Yes"), -in_df)
+
+# add asteriks to ggcorrplot
+cor_plot_labs = cor_plot + 
+  geom_text(aes(x = p_labs$Var1, 
+                y = p_labs$Var2), 
+            label = p_labs$lab, 
+            nudge_y = 0.25, 
+            size = 4) +
+  scale_fill_gradient2(midpoint = 0, 
+                       limits = c(-1, 1),
+                       low = viridis(1, option = "C"), 
+                       mid = "white", 
+                       high = viridis(1, option = "C", begin = .4),
+                       breaks = seq(-1, 1, by = 0.25),
+                       name = "") +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   hjust = 1, 
+                                   size = 12, 
+                                   color = "black"),
+        axis.text.y = element_text(size = 12, 
+                                   color = "black"),
+        axis.title = element_blank())
+
+print(cor_plot_labs)
+
+ggsave(plot = cor_plot_labs, filename = "quest_correlationmatrix.png", device = "png", path = here::here("output", "figures", "experiment1"), dpi = 800, height = 10, width = 10)
+```
+
+@questionnaire-correlate illustrates the correlations between our behavioural proxy of addiction and self-reported addiction with a range of questionnaire measures.
+
+### RISQ Approach
+
+We also included the Risq scale. Reminder, the Risq approach score specifically was assessed with the following item: "I do this behavior to feel excitement, to get a thrill, or to feel pleasure" rated on a five-point Likert scale. Let's examine the correlation between our wanting-liking dissociation and the risq scores.
+
+```{r}
+#| label: risq-correlation-with-want-like-tiktok
+#| cache: false
+
+# Netflix: Bayesian correlation
+tbf_corr_risq_tiktok <- BayesFactor::correlationBF(
+  data_params$wl_tiktok,
+  data_params$risq_tiktok_approach,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_tiktok <- exp(tbf_corr_risq_tiktok@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_risq_tiktok, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho
+estimated_correlation <- mean(posterior_samples[, "rho"])
+estimated_correlation_med <- median(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf_tiktok)`** indicates weak-moderate evidence in support of the alternative hypothesis that RISQ-approach TikTok scores relate to TikTok wanting-liking dissociation scores.
+
+The correlation estimate of the Bayesian correlation (median) is `r sprintf("%.3f", estimated_correlation_med)`. The *95% Credible Interval* of this correlation ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: risq-correlation-with-want-like-netflix
+#| cache: false
+
+# Netflix: Bayesian correlation
+tbf_corr_risq_netflix <- BayesFactor::correlationBF(
+  data_params$wl_netflix,
+  data_params$risq_netflix_approach,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_netflix <- exp(tbf_corr_risq_netflix@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_risq_netflix, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho
+estimated_correlation <- mean(posterior_samples[, "rho"])
+estimated_correlation_med <- median(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The ***BF01*** **of `r sprintf("%.3f", bf_netflix)`** indicates inconclusive evidence with respect to the relationship between RISQ-approach Netflix scores and Netflix wanting-liking dissociation scores. The correlation estimate of the Bayesian correlation (median) is `r sprintf("%.3f", estimated_correlation_med)`. The *95% Credible Interval* of this correlation ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: fig-risq-wl
+#| fig-cap: "Association between Bergen Social Media Addiction Scale and Want-like dissociation"
+#| fig-align: center
+#| out-width: "95%"
+
+mainplot <- data_params |>
+  # create a longer format dataset that includes both Netflix and TikTok data
+  tidyr::pivot_longer(
+    cols = c(wl_netflix, wl_tiktok),
+    names_to = "platform_wl",
+    values_to = "want_like"
+  ) |>
+  tidyr::pivot_longer(
+    cols = c(risq_tiktok_approach, risq_netflix_approach),
+    names_to = "platform_risq",
+    values_to = "risq_score"
+  ) |>
+  # only keep matching rows (Netflix with Netflix, TikTok with TikTok)
+  dplyr::filter(
+    (platform_wl == "wl_netflix" & platform_risq == "risq_netflix_approach") |
+    (platform_wl == "wl_tiktok" & platform_risq == "risq_tiktok_approach")
+  ) |>
+  # create a clean platform variable
+  dplyr::mutate(
+    platform = dplyr::case_when(
+      platform_wl == "wl_netflix" ~ "Netflix",
+      platform_wl == "wl_tiktok" ~ "TikTok"
+    )
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = risq_score, y = want_like, color = platform)) +
+  geom_jitter() +
+  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, guide = guide_legend(override.aes = list(color = NA))
+  ) +
+  theme_bw() +
+  labs(
+    x = "RISQ approach score", 
+    y = "Want-like dissociation",
+    color = "Wanting-liking dissociation"
+  ) +
+  theme(legend.position = "bottom") +
+  # legend formatting
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.key = element_rect(fill = "white", color = NA)
+  )
+
+maincombinedplot <- ggExtra::ggMarginal(
+  mainplot, 
+  type = "density",
+  margins = "both",
+  size = 5,
+  groupColour = TRUE,
+  groupFill = TRUE,
+)
+
+print(maincombinedplot)
+```
+
+@fig-risq-wl Shows the association between the RISQ approach score and the want-like dissociation.
+
+## Impulsivity (BIS-11)
+
+The following sections present Bayesian correlation analyses which examine the relationship between the *wanting-liking* dissociation and the Barratt Impulsiveness Scale and Subscales. The BIS-11 includes three subscales: non-planning, motor, and attention.
+
+```{r}
+#| label: data-preparation
+
+# function: run Bayesian correlation analysis
+run_bayesian_correlation <- function(x, y_vars, data, iterations = 10000) {
+  # initiate empty store
+  results <- list()
+  
+  # Loop through each y variable
+  for (var in y_vars) {
+    # compute correlation
+    corr_bf <- BayesFactor::correlationBF(
+      x = data[[x]],
+      y = data[[var]],
+      rscale = 1/3
+    )
+    
+    # extract Bayesfactor
+    bf_value <- exp(corr_bf@bayesFactor$bf)
+    
+    # extract posterior samples into matrix
+    post_samples <- as.data.frame(BayesFactor::posterior(corr_bf, iterations = iterations))
+    
+    # calculate mean correlation
+    corr_mean <- mean(post_samples$rho)
+    
+    # get credible intervals
+    ci_lower <- stats::quantile(post_samples$rho, 0.025)
+    ci_upper <- stats::quantile(post_samples$rho, 0.975)
+    
+    # calculate the probability of the correlation being larger than one
+    prob_positive <- mean(post_samples$rho > 0)
+    
+    # store results
+    results[[var]] <- list(
+      bayes_factor = bf_value,
+      correlation = corr_mean,
+      ci_lower = ci_lower,
+      ci_upper = ci_upper,
+      prob_positive = prob_positive,
+      samples = post_samples
+    )
+  }
+  
+  return(results)
+}
+
+# function: create summary tables
+create_summary_table <- function(results) {
+  var_names <- names(results)
+  
+  readable_names <- c(
+    "bis_11_total" = "Total Impulsivity",
+    "bis_11_nonplanning" = "Non-planning Impulsivity",
+    "bis_11_motor" = "Motor Impulsivity",
+    "bis_11_attention" = "Attentional Impulsivity"
+  )
+  
+  summary_df <- data.frame(
+    Variable = readable_names[var_names],
+    Correlation = sapply(results, function(x) round(x$correlation, 3)),
+    CI_Lower    = sapply(results, function(x) round(x$ci_lower, 3)),
+    CI_Upper    = sapply(results, function(x) round(x$ci_upper, 3)),
+    Bayes_Factor = sapply(results, function(x) round(x$bayes_factor, 3)),
+    Prob_Positive = sapply(results, function(x) paste0(round(x$prob_positive * 100, 1), "%"))
+  )
+  
+  return(summary_df)
+}
+
+# function: plot posteriors
+plot_posteriors <- function(results, title = "") {
+  # prepare data for plotting
+  posterior_data <- data.frame()
+  
+  readable_names <- c(
+    "bis_11_total" = "Total Impulsivity",
+    "bis_11_nonplanning" = "Non-planning Impulsivity",
+    "bis_11_motor" = "Motor Impulsivity",
+    "bis_11_attention" = "Attentional Impulsivity"
+  )
+  
+  for (var_name in names(results)) {
+    # convert matrix of posteriors to dataframe
+    samples_df <- as.data.frame(results[[var_name]]$samples)
+    
+    # extract correlation coefficients
+    temp_data <- data.frame(
+      rho = samples_df$rho,
+      variable = readable_names[var_name]
+    )
+    posterior_data <- rbind(posterior_data, temp_data)
+  }
+  
+  # create plot
+  ggplot2::ggplot(posterior_data, ggplot2::aes(x = rho, fill = variable)) +
+    ggplot2::geom_density(alpha = 0.5) +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(
+      title = title,
+      x = "Correlation coefficient (ρ)",
+      y = "Density",
+      fill = "Measure"
+    ) +
+    theme_bw() +
+    ggplot2::geom_vline(xintercept = 0, linetype = "dashed") +
+    ggplot2::scale_fill_viridis_d(option = "C") +
+    ggplot2::theme(
+      legend.position = "bottom",
+      plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"),
+      legend.title = ggplot2::element_text(face = "plain")
+    )
+}
+
+# function: interpret Bayesfactors
+interpret_bf <- function(bf) {
+  if (bf < 1/3) {
+    return("Evidence favors null hypothesis")
+  } else if (bf < 3) {
+    return("Anecdotal evidence")
+  } else if (bf < 10) {
+    return("Moderate evidence for alternative")
+  } else if (bf < 30) {
+    return("Strong evidence for alternative")
+  } else if (bf < 100) {
+    return("Very strong evidence for alternative")
+  } else {
+    return("Extreme evidence for alternative")
+  }
+}
+```
+
+### Wanting-liking Dissociation and Impulsivity
+
+```{r}
+#| label: platform-impulsivity-analysis
+
+# define variables to analyse
+y_variables <- c(
+  "bis_11_total",
+  "bis_11_nonplanning",
+  "bis_11_motor",
+  "bis_11_attention"
+)
+
+# TikTok analysis
+tiktok_results <- run_bayesian_correlation(
+  x = "wl_tiktok",
+  y_vars = y_variables,
+  data = data_params,
+  iterations = 10000
+)
+
+# Netflix analysis
+netflix_results <- run_bayesian_correlation(
+  x = "wl_netflix",
+  y_vars = y_variables,
+  data = data_params,
+  iterations = 10000
+)
+
+# add interpretation column
+tiktok_summary <- create_summary_table(tiktok_results)
+tiktok_summary$Interpretation <- sapply(tiktok_summary$Bayes_Factor, interpret_bf)
+
+netflix_summary <- create_summary_table(netflix_results)
+netflix_summary$Interpretation <- sapply(netflix_summary$Bayes_Factor, interpret_bf)
+```
+
+```{r}
+#| label: tbl-wl
+#| tbl-cap: "Bayesian correlations between the TikTok and Netflix wanting-liking dissociation and impulsivity measures"
+
+#| label: tbl-wl
+#| tbl-cap: "Bayesian correlations between the TikTok and Netflix wanting-liking dissociation and impulsivity measures"
+merged_summary <- data.frame(
+  "Impulsivity Measure" = rep(tiktok_summary[,1], 2),
+  "Correlation (ρ)" = c(sprintf("%.3f", as.numeric(tiktok_summary[,2])), sprintf("%.3f", as.numeric(netflix_summary[,2]))),
+  "95% CI Lower" = c(sprintf("%.3f", as.numeric(tiktok_summary[,3])), sprintf("%.3f", as.numeric(netflix_summary[,3]))),
+  "95% CI Upper" = c(sprintf("%.3f", as.numeric(tiktok_summary[,4])), sprintf("%.3f", as.numeric(netflix_summary[,4]))),
+  "Bayes Factor (BF₁₀)" = c(sprintf("%.3f", as.numeric(tiktok_summary[,5])), sprintf("%.3f", as.numeric(netflix_summary[,5]))),
+  "Prob(ρ > 0)" = c(sprintf("%.3f", as.numeric(tiktok_summary[,6])), sprintf("%.3f", as.numeric(netflix_summary[,6]))),
+  "Interpretation" = c(tiktok_summary[,7], netflix_summary[,7])
+)
+
+# display merged table
+kable(merged_summary, 
+      col.names = c("Impulsivity Measure", "Correlation (ρ)", "95% CI Lower", 
+                    "95% CI Upper", "Bayes Factor (BF₁₀)", 
+                    "Prob(ρ > 0)", "Interpretation"),
+      align = c("l", "l", "c", "c", "c", "c", "c", "l")) |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = TRUE, position = "center") |>
+  row_spec(0, bold = TRUE, background = "#f5f5f5") |>
+  pack_rows("TikTok", 1, nrow(tiktok_summary), background = "#f8f9fa") |>
+  pack_rows("Netflix", nrow(tiktok_summary) + 1, nrow(merged_summary), background = "#e9ecef")
+
+# TikTok strongest correlation
+tik_idx <- which.max(abs(tiktok_summary$Correlation))
+tik_var    <- tiktok_summary$Variable[tik_idx]
+tik_rho    <- sprintf("%.3f", tiktok_summary$Correlation[tik_idx])
+tik_lower  <- sprintf("%.3f", tiktok_summary$CI_Lower[tik_idx])
+tik_upper  <- sprintf("%.3f", tiktok_summary$CI_Upper[tik_idx])
+tik_bf     <- sprintf("%.3f", tiktok_summary$Bayes_Factor[tik_idx])
+tik_interp <- tolower(tiktok_summary$Interpretation[tik_idx])
+
+# Netflix strongest correlation
+net_idx <- which.max(abs(netflix_summary$Correlation))
+net_var    <- netflix_summary$Variable[net_idx]
+net_rho    <- sprintf("%.3f", netflix_summary$Correlation[net_idx])
+net_lower  <- sprintf("%.3f", netflix_summary$CI_Lower[net_idx])
+net_upper  <- sprintf("%.3f", netflix_summary$CI_Upper[net_idx])
+net_bf     <- sprintf("%.3f", netflix_summary$Bayes_Factor[net_idx])
+net_interp <- tolower(netflix_summary$Interpretation[net_idx])
+```
+
+@tbl-wl shows the results of the Bayesian correlation analyses for self-reported addiction for TikTok and Netflix and the impulsivity measures.
+
+**TikTok:** The Bayesian correlation analyses reveal that the *wanting-liking* dissociation is not correlated with the BIS-11 total score or any of the subscales. The strongest correlation is with `r tik_var` (ρ = `r tik_rho`, 95% CI \[`r tik_lower`, `r tik_upper`\]), with a Bayes Factor of `r tik_bf`, indicating `r tik_interp`.
+
+**Netflix:** The Netflix correlation analysis shows that the *wanting-liking* dissociation is not correlated with the BIS-11 total score or any of the subscales. The strongest correlation is with `r net_var` (ρ = `r net_rho`, 95% CI \[`r net_lower`, `r net_upper`\]), with a Bayes Factor of `r net_bf`, indicating `r net_interp`.
+
+```{r}
+#| label: fig-wl-corr
+#| fig-cap: "Posterior distributions of correlation coefficients between TikTok wanting-liking dissociation and impulsivity measures. A = TikTok, B = Netflix."
+#| warning: false
+#| out-width: "95%"
+
+# Explicitly use ggplot2 namespace
+tik_plot <- plot_posteriors(tiktok_results, title = "")
+net_plot <- plot_posteriors(netflix_results, title = "")
+
+combined_plot <- ggpubr::ggarrange(
+  tik_plot, net_plot,
+  ncol = 2,
+  labels = c("A", "B"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+combined_plot
+```
+
+@fig-wl-corr shows the posterior distributions for the correlation coefficients of TikTok and Netflix respectively. The distributions indicate the uncertainty in our estimates while showing the most probable correlation values.
+
+#### Compare correlation coefficients across conditions
+
+To directly compare how TikTok and Netflix usage relate to impulsivity, we created a combined visualization:
+
+```{r}
+#| label: fig-comparison
+#| fig-cap: "Comparison of correlation strengths between platform usage and impulsivity measures"
+#| out-width: "95%"
+
+# prepare comparison of correlations
+comparison_data <- data.frame(
+  Measure = rep(tiktok_summary$Variable, 2),
+  Platform = c(rep("TikTok", nrow(tiktok_summary)), rep("Netflix", nrow(netflix_summary))),
+  Correlation = c(tiktok_summary$Correlation, netflix_summary$Correlation),
+  CI_Lower = c(tiktok_summary$CI_Lower, netflix_summary$CI_Lower),
+  CI_Upper = c(tiktok_summary$CI_Upper, netflix_summary$CI_Upper)
+)
+
+# order factors for plotting
+comparison_data$Measure <- factor(comparison_data$Measure, 
+                                 levels = c("Total Impulsivity", 
+                                           "Attentional Impulsivity", 
+                                           "Motor Impulsivity", 
+                                           "Non-planning Impulsivity"))
+
+# create comparison plot
+ggplot2::ggplot(comparison_data, 
+                ggplot2::aes(x = Measure, y = Correlation, fill = Platform)) +
+  ggplot2::geom_bar(stat = "identity", 
+                   position = ggplot2::position_dodge(width = 0.9), 
+                   width = 0.8) +
+  ggplot2::geom_errorbar(
+    ggplot2::aes(ymin = CI_Lower, ymax = CI_Upper), 
+    position = ggplot2::position_dodge(width = 0.9), 
+    width = 0.25
+  ) +
+  theme_bw() +
+  ggplot2::scale_fill_manual(values = c("TikTok" = "black", "Netflix" = "red"), name = "Wanting-liking dissociation") +
+  ggplot2::labs(x = "", y = "Correlation (ρ)") +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+    plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"),
+    legend.title = ggplot2::element_text(face = "plain"),
+    legend.position = "bottom",
+    text = element_text(size = 11)
+  ) +
+  ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
+  ggplot2::coord_flip()
+```
+
+@fig-comparison illustrates the differences in correlation strength between the two platforms across all impulsivity measures. Across Netflix and TikTok, the *wanting-liking* dissociation does not show substantial differences and/or correlations with the impulsivity measures. Let's visualise the data.
+
+### Computational Parameters and Self-reported Addiction
+
+Below, we examine correlations between other computational parameters (effort sensitivity, reward sensitivity) and self-reported levels of social media addiction (TikTok, BSMAS),
+
+### Self-reported Addiction and Impulsivity
+
+In the following, I examine the correlation between the self-reported TikTok and Netflix addiction scores (Bergen Scale) and the impulsivity measures.
+
+```{r}
+#| label: bsmas-impulsivity-analysis
+
+# function: format data in long
+prepare_data <- function(data_params) {
+  data_params |>
+
+    # format bsmas scores long
+    tidyr::pivot_longer(
+      cols = c(bsmas_netflix_total, bsmas_tiktok_total),
+      names_to = "platform_bsmas",
+      values_to = "bsmas_score"
+    ) |>
+    # only keep matching rows 
+    dplyr::filter(
+      (platform_bsmas == "bsmas_netflix_total") |
+      (platform_bsmas == "bsmas_tiktok_total")
+    ) |>
+    # create a clean platform variable
+    dplyr::mutate(
+      platform = dplyr::case_when(
+        platform_bsmas == "bsmas_netflix_total" ~ "Netflix",
+        platform_bsmas == "bsmas_tiktok_total" ~ "TikTok"
+      )
+    )
+}
+
+# function: generate correlation plot
+create_plot <- function(data, y_var, y_label) {
+  data |>
+    # create plot
+    ggplot2::ggplot(aes(x = bsmas_score, y = .data[[y_var]], color = platform)) +
+    geom_jitter() +
+    geom_smooth(method = "lm", se = TRUE, show.legend = FALSE) +
+    scale_color_viridis_d(option = "magma", begin = 0.3, end = 0.7) +
+    theme_bw() +
+    labs(
+      x = "Self-reported addiction", 
+      y = y_label,
+      color = "Wanting-liking dissociation"
+    ) +
+    theme(legend.position = "bottom") +
+    # legend formatting
+    guides(color = guide_legend(override.aes = list(size = 3))) +
+    theme(
+      legend.position = "bottom",
+      legend.title = element_text(face = "plain"),
+      legend.background = element_rect(fill = "white", color = NA),
+      legend.key = element_rect(fill = "white", color = NA)
+    ) +
+    scale_x_continuous(limits = c(5, 30), breaks = seq(5, 30, 5))
+}
+
+# transform data
+transformed_data <- prepare_data(data_params)
+
+# TikTok analysis
+tiktok_results <- run_bayesian_correlation(
+  x = "bsmas_tiktok_total",
+  y_vars = y_variables,
+  data = data_params,
+  iterations = 10000
+)
+
+# Netflix analysis
+netflix_results <- run_bayesian_correlation(
+  x = "bsmas_netflix_total",
+  y_vars = y_variables,
+  data = data_params,
+  iterations = 10000
+)
+
+# add interpretation column
+tiktok_summary <- create_summary_table(tiktok_results)
+tiktok_summary$Interpretation <- sapply(tiktok_summary$Bayes_Factor, interpret_bf)
+
+netflix_summary <- create_summary_table(netflix_results)
+netflix_summary$Interpretation <- sapply(netflix_summary$Bayes_Factor, interpret_bf)
+```
+
+```{r}
+#| label: tbl-merged-addiction
+#| tbl-cap: "Bayesian correlations between self-reported social media addiction and impulsivity measures"
+
+merged_summary <- data.frame(
+  "Impulsivity Measure" = rep(tiktok_summary[,1], 2),
+  "Correlation (ρ)" = c(tiktok_summary[,2], netflix_summary[,2]),
+  "95% CI Lower" = c(tiktok_summary[,3], netflix_summary[,3]),
+  "95% CI Upper" = c(tiktok_summary[,4], netflix_summary[,4]),
+  "Bayes Factor (BF₁₀)" = c(tiktok_summary[,5], netflix_summary[,5]),
+  "Prob(ρ > 0)" = c(tiktok_summary[,6], netflix_summary[,6]),
+  "Interpretation" = c(tiktok_summary[,7], netflix_summary[,7])
+)
+
+# display merged table
+kable(merged_summary, 
+      col.names = c("Impulsivity Measure", "Correlation (ρ)", "95% CI Lower", 
+                    "95% CI Upper", "Bayes Factor (BF₁₀)", 
+                    "Prob(ρ > 0)", "Interpretation"),
+      align = c("l", "l", "c", "c", "c", "c", "c", "l")) |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = TRUE, position = "center") |>
+  row_spec(0, bold = TRUE, background = "#f5f5f5") |>
+  # add background colours
+  pack_rows("TikTok", 1, nrow(tiktok_summary), background = "#f8f9fa") |>
+  pack_rows("Netflix", nrow(tiktok_summary) + 1, nrow(merged_summary), background = "#e9ecef")
+```
+
+@tbl-merged-addiction shows the results of the Bayesian correlation analyses for self-reported addiction for TikTok and Netflix and the impulsivity measures.
+
+**TikTok:** The correlation analyses reveal that the self-reported addiction scores for TikTok are correlated with a subset of the impulsivity measures. The strongest correlation is with `r tiktok_summary$Variable[which.max(abs(tiktok_summary$Correlation))]` (ρ = `r tiktok_summary$Correlation[which.max(abs(tiktok_summary$Correlation))]`, 95% CI \[`r tiktok_summary$CI_Lower[which.max(abs(tiktok_summary$Correlation))]`, `r tiktok_summary$CI_Upper[which.max(abs(tiktok_summary$Correlation))]`\]), with a Bayes Factor of `r tiktok_summary$Bayes_Factor[which.max(abs(tiktok_summary$Correlation))]`, indicating `r tolower(tiktok_summary$Interpretation[which.max(abs(tiktok_summary$Correlation))])`.
+
+**Netflix:** The correlation analyses reveal that the self-reported addiction scores for Netflix are strongly correlated with most of the impulsivity measures. The strongest correlation is with `r netflix_summary$Variable[which.max(abs(netflix_summary$Correlation))]` (ρ = `r netflix_summary$Correlation[which.max(abs(tiktok_summary$Correlation))]`, 95% CI \[`r netflix_summary$CI_Lower[which.max(abs(netflix_summary$Correlation))]`, `r netflix_summary$CI_Upper[which.max(abs(netflix_summary$Correlation))]`\]), with a Bayes Factor of `r netflix_summary$Bayes_Factor[which.max(abs(netflix_summary$Correlation))]`, indicating `r tolower(netflix_summary$Interpretation[which.max(abs(netflix_summary$Correlation))])`.
+
+```{r}
+#| label: fig-bsmas
+#| fig-cap: "Posterior distributions of correlation coefficients between self-reported TikTok/Netflix addiction and impulsivity measures. A = TikTok, B = Netflix."
+#| warning: false
+#| out-width: "95%"
+
+# Explicitly use ggplot2 namespace
+tik_plot <- plot_posteriors(tiktok_results, title = "")
+net_plot <- plot_posteriors(netflix_results, title = "")
+
+combined_plot <- ggpubr::ggarrange(
+  tik_plot, net_plot,
+  ncol = 2,
+  labels = c("A", "B"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+combined_plot
+```
+
+@fig-bsmas shows the posterior distributions for the correlation coefficients between impulsivity measures and wanting-liking dissociation for TikTok and Netflix, respectively. The distributions indicate the uncertainty in our estimates while showing the most probable correlation values. This side-by-side comparison allows for direct visual assessment of how different impulsivity measures correlate with wanting-liking dissociation across both platforms.
+
+We illustrate the raw data and the correlations in the plots below.
+
+```{r}
+#| label: bis-bsmas-correlations
+#| fig-cap: "Correlations between wanting-liking dissociations and impulsivity"
+#| out-width: "95%"
+
+# create plots for total and subscale scores
+p_total <- create_plot(transformed_data, "bis_11_total", "Total")
+p_nonplanning <- create_plot(transformed_data, "bis_11_nonplanning", "Nonplanning")
+p_motor <- create_plot(transformed_data, "bis_11_motor", "Motor")
+p_attention <- create_plot(transformed_data, "bis_11_attention", "Attention")
+
+# arrange plots
+ggpubr::ggarrange(
+  p_total, p_nonplanning, p_motor, p_attention, 
+  ncol = 2, nrow = 2, 
+  common.legend = TRUE, 
+  legend = "bottom",
+  labels = c("A", "B", "C", "D"), 
+  label.y = 1, 
+  heights = rep(0.5, 4)
+)
+```
+
+## Cross-sensitisation
+
+There is some research into cross-sensitisation between different substance addictions, such that one makes an individual more susceptible to another. Although this evidence is highly mixed and it may not be reasonable to assume sufficient variation in the present sample (predominantly highly educated students) I'll explore this in more detail below.
+
+```{r}
+data_params |>
+  dplyr::select(contains("assist") & contains("total")) |>
+  summary()
+```
+
+Assist questionnaire interpretation guidelines from the WHO, see https://www.who.int/publications/i/item/978924159938-2.
+
+| Risk Level    | Alcohol | All Other Substances |
+|---------------|---------|----------------------|
+| Lower risk    | 0-10    | 0-3                  |
+| Moderate risk | 11-26   | 4-26                 |
+| High risk     | 27+     | 27+                  |
+
+```{r}
+#| label: fig-assist
+#| fig-cap: "Proportion of low, moderate, and high risk of addiction across substances."
+#| warning: false
+#| out-width: "95%"
+
+# define risk categories based on WHO cutoffs
+categorize_risk <- function(score, substance_type) {
+  if (substance_type == "alcohol") {
+    case_when(
+      score <= 10 ~ "Low risk",
+      score <= 26 ~ "Moderate risk",
+      score >= 27 ~ "High risk",
+      TRUE ~ NA_character_
+    )
+  } else {
+    case_when(
+      score <= 3 ~ "Low risk",
+      score <= 26 ~ "Moderate risk",
+      score >= 27 ~ "High risk",
+      TRUE ~ NA_character_
+    )
+  }
+}
+
+# create risk categories for all assist variables
+assist_risk_data <- data_params |>
+  dplyr::select(contains("assist") & contains("total")) |>
+  pivot_longer(everything(), names_to = "substance", values_to = "score") |>
+  drop_na(score) |>
+  mutate(
+    substance_clean = str_remove(substance, "assist_") |>
+                     str_remove("_total") |>
+                     str_to_title(),
+    substance_type = if_else(str_detect(substance, "alcohol"), "alcohol", "other"),
+    risk_category = map2_chr(score, substance_type, categorize_risk),
+    risk_category = factor(risk_category, 
+                          levels = c("Low risk", "Moderate risk", "High risk"))
+  ) |>
+  dplyr::filter(!is.na(risk_category))
+
+# calculate risk for each substance
+risk_proportions <- assist_risk_data |>
+  dplyr::count(substance_clean, risk_category) |>
+  dplyr::group_by(substance_clean) |>
+  dplyr::mutate(
+    total = sum(n),
+    proportion = n / total,
+    percentage = proportion * 100
+  ) |>
+  dplyr::ungroup()
+
+# colour palette for risk categories
+risk_colors <- c(
+  "Low risk" = "#2E8B57",      
+  "Moderate risk" = "#FF8C00",   
+  "High risk" = "#DC143C"     
+)
+
+# prepare waffle data
+waffle_data <- risk_proportions |>
+  dplyr::mutate(scaled_n = round(proportion * 100)) |>
+  dplyr::mutate(substance_clean = factor(substance_clean, 
+                                  levels = c("Alcohol", "Amphetamine", "Cannabis", "Cocaine", "Hallucinogens",
+                                             "Inhalants", "Opioids", "Sedatives", "Other")
+  )) |>
+  uncount(scaled_n) |>
+  group_by(substance_clean) |>
+  dplyr::mutate(
+    # create x and y coordinates for each square
+    y = rep(1:10, each = 10, length.out = n()),
+    x = rep(1:10, length.out = n())
+  ) |>
+   dplyr::mutate(
+    risk_category = factor(risk_category, 
+                          levels = c("High risk", "Moderate risk", "Low risk"))) |>
+  dplyr::ungroup()
+
+# create waffle plot
+waffle_data |>
+  dplyr::filter(substance_clean != "Other") |>
+  ggplot2::ggplot(aes(x = x, y = y, fill = risk_category)) +
+  geom_tile(color = "white", size = 0.25) +
+  ggplot2::facet_wrap(~ substance_clean, ncol = 4) +
+  scale_fill_manual( 
+    values = c("Low risk" = viridis(n = 1, option = "D", begin = .75, end = .75), 
+               "Moderate risk" = viridis(n = 1, option = "B", begin = .85, end = .85), 
+               "High risk" = viridis(n = 1, option = "B", begin = .5, end = .5)),
+               
+    drop = FALSE, 
+    name = ""
+  ) +
+  coord_equal() +
+  theme_minimal() +  
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "plain", size = 12),
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_blank(), # remove panel borders
+    panel.background = element_blank(), # remove panel background
+    plot.background = element_blank(), # remove plot background
+    legend.position = "bottom",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "plain", hjust = 0, size = 12)
+  )
+```
+
+@fig-assist displays the proportion of high, moderate, and low risk of substance addictions for the different substances assessed as part of the ASSIST questionnaire. These cut-offs are based on those put forward by the WHO and, across the board, indicate very few instances of moderate or high risk. Thus, follow-up analyses on differences in substance don't make sense.
+
+```{r}
+#| label: fig-assist-corrs
+#| fig-cap: "Correlation matrix for substance use and social media variables."
+#| warning: false
+#| out-width: "95%"
+
+data_params |>
+  dplyr::select(contains("assist") & contains("total"), wl_tiktok_z, bis_11_total, bsmas_tiktok_total) |>
+  dplyr::select(where(~ length(unique(.x)) > 1)) |> # remove columns with no response variation
+  GGally::ggpairs(columnLabels = c("Alcohol", "Cannabis", "Cocaine", "Amphetamines", "Sedatives",
+                                   "Hallucinogen", "Opioids", "WL TikTok", "BIS-11", "BSMAS TikTok"),
+                  progress = FALSE) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank()
+  )
+```
+
+@fig-assist-corrs illustrates the correlations between ASSIST scale scores and the *wanting-liking* dissociation for TikTok and Netflix conditions. Variables that had no response variation in the present sample were removed for readability. Given the demographic of our participants and the lack of variation in most responses, I will not look into the substance measures any further.
+
+### Mental Health Correlates
+
+```{r}
+#| label: fig-mh-corr
+#| fig-cap: "Correlation matrix for mental health measures and social media variables."
+#| warning: false
+#| out-width: "95%"
+
+data_params |>
+  dplyr::select(phq_8_total, gad_7_total, cius_14_total,
+         a_tiktok, kE_tiktok, kR_tiktok, strap_tiktok_avg, wl_tiktok, wl_netflix,
+         bsmas_tiktok_total, bsmas_netflix_total) |>
+  dplyr::select(where(~length(unique(.x)) > 1)) |>
+  GGally::ggpairs(columnLabels = c("PHQ-8", "GAD-7", "CIUS", 
+                                   "a", "kE", "kR", "Liking T", "WL TikTok", "WL Netflix", 
+                                   "BSMAS_T", "BSMAS_N"), 
+                  rowLabels = c("PHQ-8", "GAD-7", "CIUS", 
+                                   "a", "kE", "kR", "Liking T", "WL TikTok", "WL Netflix", 
+                                   "BSMAS_T", "BSMAS_N"),
+                  progress = FALSE) +
+    theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank()
+  )
+
+
+data_params |>
+  dplyr::select(phq_8_total, gad_7_total, cius_14_total,
+         a_tiktok, kE_tiktok, kR_tiktok, strap_tiktok_avg, wl_tiktok, wl_netflix,
+         bsmas_tiktok_total, bsmas_netflix_total) |>
+  set_names(c("PHQ8", "GAD7", "CIUS",
+              "a_tiktok", "kE_tiktok", "kR_tiktok", "like_tiktok", "wl_tiktok", "wl_netflix",
+              "bsmas_tiktok", "bsmas_netflix")) |>
+  dplyr::select(where(~length(unique(.x)) > 1)) |>
+  stats::cor() |>
+  ggcorrplot::ggcorrplot( 
+           method = "square", 
+           lab = TRUE,
+           type = "lower", 
+           show.diag = FALSE, 
+           digits = 2) + 
+  ggplot2::scale_fill_gradient2(midpoint = 0, 
+                       limits = c(-1, 1),
+                       low = viridis(1, option = "C"), 
+                       mid = "white", 
+                       high = viridis(1, option = "C", begin = .4),
+                       breaks = seq(-1, 1, by = 0.25),
+                       name = "") +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   hjust = 1, 
+                                   size = 12, 
+                                   color = "black"),
+        axis.text.y = element_text(size = 12, 
+                                   color = "black"),
+        axis.title = element_blank())
+```

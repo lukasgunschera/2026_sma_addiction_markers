@@ -1,0 +1,1180 @@
+---
+title: "Sensitivity Analyses"
+description: "This document includes the documentation of the performed sensitivity analyses for the winning parabolic effort-based decision-making model with three free parameters."
+author:
+  - name: Lukas Gunschera
+    orcid: 0000-0002-8241-0833
+    email: l.gunschera@outlook.com
+    corresponding: true
+    affiliation:
+      - ref: 1
+affiliations:
+  - id: 1
+    name: University of Cambridge
+    department: Medical Research Council Cognition and Brain Sciences Unit
+format:
+  html:
+    code-fold: true
+    toc: true
+editor: visual
+---
+
+```{r}
+#| label: Setup-document
+#| include: false
+#| message: false
+#| cache: false
+
+# Output options
+is_html <- knitr::is_html_output()
+knitr::opts_chunk$set(
+  eval = TRUE,
+  cache = FALSE,  # disable global caching by default
+  warning = FALSE,
+  error = FALSE,
+  message = FALSE,
+  echo = is_html,
+  fig.width = 7,
+  fig.height = 5,
+  dpi = 300,
+  dev = "ragg_png"  # ragg_png for better performance
+)
+
+source(here::here("code", "00_setup.R"))
+set.seed(777)
+
+library(renv) # load renv package
+renv::restore(project = here::here()) # restore the environment
+
+# load dependencies
+pacman::p_load(gt, zoo, plm, brms, ragg, here, knitr, purrr, dplyr, tidyr, ggpubr, scales, viridis, moments, stringr, rstatix, janitor, ggplot2, ggExtra, rstanarm, gtExtras, cmdstanr, magrittr, hBayesDM, patchwork, ggpattern, bayesplot, tidybayes, lubridate, posterior, bayestestR, BayesFactor, bridgesampling)
+
+# load custom dependencies
+source(here::here("code", "experiment1", "functions", "fun_plots.R"))
+source(here::here("code", "experiment1", "functions", "fun_helper.R"))
+source(here::here("code", "experiment1", "functions", "fun_fit_models.R"))
+source(here::here("code", "experiment1", "functions", "fun_model_preprocess.R"))
+source(here::here("code", "experiment1", "functions", "fun_modeling_cleandata.R"))
+source(here::here("code", "experiment1", "functions", "fun_parameter_estimates.R"))
+source(here::here("code", "experiment1", "functions", "fun_posterior_predictions.R"))
+source(here::here("code", "experiment1", "functions", "fun_model_convergence_check.R"))
+
+viridis_colors <- viridis::viridis(4, option = "magma", begin = 0.3, end = 0.7)
+condition_colors <- viridis::viridis(2, option = "magma", begin = 0.3, end = 0.7)
+```
+
+```{r}
+cat("Document rendered at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+```
+
+## Data
+
+Load the pocessed participant data as returned from the script 'code/sma_dataprocessing.R'. Note, the current script depends on you running the sma_dataprocessing.R script prior in order to access the returned data object. This is to reduce computational demands and redundancies.
+
+```{r}
+#| label: data import
+
+data_params <- readRDS(here::here("data", "experiment1", "modelling", "parameters", "m3_para_data.RDS"))
+
+# get subject identifier of participant reading magazines
+p_excl <- data_params |> dplyr::filter(watch_netflix_compliance_text == "I also go through the magazines briefly") |> pull(subj_id)
+
+# exclude participants based on compliance violations
+data_main <- data_params |>
+  dplyr::filter(watch_tiktok_compliance == TRUE) |> # exclude TikTok non-compliers
+  dplyr::filter(subj_id != p_excl) # exclude Netflix non-compliers
+```
+
+Compute the descriptive statistics for the parameters based on which the *wanting-liking difference* is estimated. This helps us gauge appropriate prior distributions for later statistical analyses.
+
+```{r}
+#|label: z-tranform
+
+# get the mean and standard deviation for wanting estimates (across conditions)
+a_mean <- mean(c(data_params$a_netflix, data_params$a_tiktok), na.rm = TRUE)
+a_sd <- sd(c(data_params$a_netflix, data_params$a_tiktok), na.rm = TRUE)
+
+# get the mean and standard deviation for liking estimates (across conditions)
+strap_mean <- mean(c(data_params$strap_netflix_avg, data_params$strap_tiktok_avg), na.rm = TRUE)
+strap_sd <- sd(c(data_params$strap_netflix_avg, data_params$strap_tiktok_avg), na.rm = TRUE)
+
+# z-transform variables
+data_params <- data_params |>
+  dplyr::mutate(
+    # wanting estimates
+    a_netflix_z = (a_netflix - a_mean) / a_sd,
+    a_tiktok_z = (a_tiktok - a_mean) / a_sd,
+    
+    # liking estimates
+    strap_netflix_avg_z = (strap_netflix_avg - strap_mean) / strap_sd,
+    strap_tiktok_avg_z = (strap_tiktok_avg - strap_mean) / strap_sd,
+    
+    # wanting liking difference
+    wl_tiktok_z = a_tiktok_z - strap_tiktok_avg_z,
+    wl_netflix_z = a_netflix_z - strap_netflix_avg_z
+  )
+
+## Transformation for main dataset (incl. compliance exclusions)
+
+# get the mean and standard deviation for wanting estimates (across conditions)
+a_mean <- mean(c(data_main$a_netflix, data_main$a_tiktok), na.rm = TRUE)
+a_sd <- sd(c(data_main$a_netflix, data_main$a_tiktok), na.rm = TRUE)
+
+# get the mean and standard deviation for liking estimates (across conditions)
+strap_mean <- mean(c(data_main$strap_netflix_avg, data_main$strap_tiktok_avg), na.rm = TRUE)
+strap_sd <- sd(c(data_main$strap_netflix_avg, data_main$strap_tiktok_avg), na.rm = TRUE)
+
+# z-transform variables
+data_main <- data_main |>
+  dplyr::mutate(
+    # wanting estimates
+    a_netflix_z = (a_netflix - a_mean) / a_sd,
+    a_tiktok_z = (a_tiktok - a_mean) / a_sd,
+    
+    # liking estimates
+    strap_netflix_avg_z = (strap_netflix_avg - strap_mean) / strap_sd,
+    strap_tiktok_avg_z = (strap_tiktok_avg - strap_mean) / strap_sd,
+    
+    # wanting liking difference
+    wl_tiktok_z = a_tiktok_z - strap_tiktok_avg_z,
+    wl_netflix_z = a_netflix_z - strap_netflix_avg_z
+  )
+```
+
+The above code adds the z-transformed scores for *wanting* and *liking* as per the mean and standard deviation of the estimates across conditions.
+
+```{r}
+#| label: descriptive statistics
+
+# select subset of variables
+vars_of_interest <- c("a_tiktok", "a_tiktok_z", "a_netflix", "a_netflix_z", "strap_tiktok_avg", "strap_tiktok_avg_z", "strap_netflix_avg", "strap_netflix_avg_z", "wl_tiktok", "wl_netflix", "wl_tiktok_z", "wl_netflix_z")
+
+# format long wanting data for plotting
+a_vars_long <- data_params |>
+  dplyr::select(a_netflix, a_tiktok, a_netflix_z, a_tiktok_z) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  ) |>
+  # add category
+  dplyr::mutate(
+    condition = case_when(
+      grepl("netflix", variable) ~ "Netflix",
+      grepl("tiktok", variable) ~ "TikTok"
+    ),
+    type = if_else(grepl("_z$", variable), "z-score", "raw"),
+    var_group = "a"
+  )
+
+# format long liking data for plotting
+strap_vars_long <- data_params |>
+  dplyr::select(strap_netflix_avg, strap_tiktok_avg, strap_netflix_avg_z, strap_tiktok_avg_z) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  ) |>
+  # add category 
+  dplyr::mutate(
+    condition = case_when(
+      grepl("netflix", variable) ~ "Netflix",
+      grepl("tiktok", variable) ~ "TikTok"
+    ),
+    type = if_else(grepl("_z$", variable), "z-score", "raw"),
+    var_group = "strap"
+  )
+
+wl_vars_long <- data_params |>
+  dplyr::select(wl_netflix, wl_tiktok, wl_netflix_z, wl_tiktok_z) |>
+  pivot_longer(
+    cols = everything(), 
+    names_to = "variable",
+    values_to = "value"
+  ) |>
+  # add category
+  dplyr::mutate(
+    condition = case_when(
+      grepl("netflix", variable) ~ "Netflix",
+      grepl("tiktok", variable) ~ "TikTok"
+      ),
+    type = if_else(grepl("_z$", variable), "z-score", "raw"),
+    var_group = "wl_diff"
+  )
+
+# combined long dataset
+all_vars_long <- bind_rows(a_vars_long, strap_vars_long, wl_vars_long)
+
+# descriptive statistics table
+descriptive_stats <- all_vars_long |>
+  dplyr::group_by(var_group, type, condition) |>
+  dplyr::summarize(
+    n = sum(!is.na(value)),
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(var_group, type, condition)
+
+# print descriptive statistics
+print(descriptive_stats)
+```
+
+Visualise the distribution of the estimates, both raw and z-transformed.
+
+```{r}
+#| label: visualise descriptives
+#| fig-label: descriptive statistics
+
+# densities of wanting variables
+a_density_plot <- all_vars_long |>
+  dplyr::filter(var_group == "a") |>
+  ggplot(aes(x = value, fill = condition)) +
+  geom_density(alpha = 0.7, outline.type = "lower", colour = NA) +
+  facet_wrap(~type, scales = "free_x", ncol = 1) +
+  scale_fill_manual(values = condition_colors) +
+  labs(
+    title = "Density of 'wanting'",
+    subtitle = "Raw values and z-transformed values",
+    x = "Value", 
+    y = "Density",
+    fill = "Condition"
+  ) +
+  theme_custom() +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 11, face = "bold"),
+    legend.position = "bottom",
+    plot.title = element_text(size = 11, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5)
+  )
+
+# densities of liking variables
+strap_density_plot <- all_vars_long |>
+  dplyr::filter(var_group == "strap") |>
+  ggplot(aes(x = value, fill = condition)) +
+  geom_density(alpha = 0.7, outline.type = "lower", colour = NA) + 
+  facet_wrap(~type, scales = "free_x", ncol = 1) +
+  scale_fill_manual(values = condition_colors) +
+  labs(
+    title = "Density of 'liking'",
+    subtitle = "Raw values and z-transformed values",
+    x = "Value", 
+    y = "Density",
+    fill = "Condition"
+  ) +
+  theme_custom() +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 11, face = "bold"),
+    legend.position = "bottom",
+    plot.title = element_text(size = 11, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5)
+  )
+
+# densities of wanting-liking differences
+wl_density_plot <- all_vars_long |>
+  dplyr::filter(var_group == "wl_diff") |>
+  ggplot(aes(x = value, fill = condition)) +
+  geom_density(alpha = 0.7, outline.type = "lower", colour = NA) + 
+  facet_wrap(~type, scales = "free_x", ncol = 1) +
+  scale_fill_manual(values = condition_colors) +
+  labs(
+    title = "Density of 'wanting-liking dissociation'",
+    subtitle = "Raw values and z-transformed values",
+    x = "Value", 
+    y = "Density",
+    fill = "Condition"
+  ) +
+  theme_custom() +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 11, face = "bold"),
+    legend.position = "bottom",
+    plot.title = element_text(size = 11, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5)
+  )
+
+# combine plots
+all_density_plot <- all_vars_long |>
+  dplyr::mutate(var_group = factor(var_group, levels = c("a", "strap", "wl_diff"), 
+                           labels = c("Wanting", "Liking", "Wanting-liking dissociation"))) |>
+  ggplot(aes(x = value, fill = condition)) +
+  geom_density(alpha = 0.7, outline.type = "lower", colour = NA) +
+  facet_grid(type ~ var_group, scales = "free") +
+  scale_fill_manual(values = condition_colors) +
+  labs(
+    title = "",
+    subtitle = "",
+    x = "", 
+    y = "Density",
+    fill = "Condition"
+  ) +
+  theme_custom() +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 11, face = "bold"),
+    legend.position = "bottom",
+    plot.title = element_text(size = 11, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5)
+  )
+
+# output combined plots overview
+all_density_plot
+```
+
+## Prior Sensitivity Checks
+
+### Determine sensible priors
+
+```{r}
+#| label: compute-default-cauchy
+
+val <- pcauchy(abs(.5), 0, 1/3)
+```
+
+Whereas the used scale of 1/3 assigns a prior probability of `r paste0(sprintf("%.3f", val),"%")` to values more extreme than 0.5, the following steps will examine the effect of different prior distributions on our conclusions. To this end, I will compare the group means with a range of different prior settings.
+
+```{r}
+#| label: cauchy-distributions
+
+# function: find scale parameter where x% of the distribution are more extreme than effect size threshold y
+find_cauchy_scale <- function(x_percent, y_effect, location = 0) {
+  
+  # convert percent to probability
+  x_prob <- x_percent / 100
+  
+  # function: compute probability assigned to values more extreme than threshold y
+  get_prob <- function(scale) {
+    # symmetric distribution requires multiplication by two
+    2 * (1 - pcauchy(abs(y_effect), location, scale))
+  }
+  
+  # function: find scale where probability of extreme values equals the target proportion x
+  objective <- function(scale) {
+    (get_prob(scale) - x_prob)^2
+  }
+  
+  # use optim to find minimum
+  result <- stats::optimize(objective, interval = c(0.0001, 10))
+  
+  return(result$minimum)
+}
+
+# function: compute scale parameters for combinations of values
+create_scale_table <- function(x_percents = c(5, 10, 20, 30, 50), y_effects = c(0.2, 0.5, 0.8), location = 0) {
+  
+  # create empty matrix for storage
+  result_matrix <- matrix(NA, nrow = length(x_percents), ncol = length(y_effects))
+  rownames(result_matrix) <- paste0(x_percents, "%")
+  colnames(result_matrix) <- paste0("Cohen's d >", y_effects)
+  
+  # populate matrix
+  for (i in 1:length(x_percents)) {
+    for (j in 1:length(y_effects)) {
+      result_matrix[i, j] <- round(
+        find_cauchy_scale(x_percents[i], y_effects[j], location), 3
+      )
+    }
+  }
+  
+  return(as.data.frame(result_matrix))
+}
+
+# compute scale values for the combination between various percentages of more extreme values for different effect sizes
+scale_table <- create_scale_table(x_percents = c(5, 10, 20, 30, 50), y_effects = c(0.2, 0.5, 0.8), location = 0)
+
+print(scale_table)
+```
+
+The above table illustrates the different scale values of the Cauchy distribution that yield a given percent of effects larger than a small, medium, or large effect. A more conservative approach involves selecting a distribution that is more narrow and assigns less prior probability to effects that are large.
+
+```{r}
+#| label: visualise-cauchy
+#| fig-cap: "Cauchy distribution for different scale values"
+#| fig-align: center
+#| out-width: "90%"
+
+# function: plot cauchy distributions
+plot_cauchy <- function(scales, location = 0, x_range = c(-2, 2), highlight_y = NULL) {
+  
+  # create dataframe
+  x <- seq(x_range[1], x_range[2], by = 0.01)
+  df <- data.frame(x = x)
+  
+  # add densities for each scale
+  for (i in 1:length(scales)) {
+    scale_name <- paste("scale", scales[i], sep = "_")
+    df[[scale_name]] <- dcauchy(x, location, scales[i])
+  }
+  
+  # reshape data for plotting
+  library(tidyr)
+  df_long <- pivot_longer(
+    df, 
+    cols = -x, 
+    names_to = "scale", 
+    values_to = "density"
+  )
+  
+  # change names for legend 
+  df_long$scale_value <- as.numeric(gsub("scale_", "", df_long$scale))
+  df_long$scale_label <- paste("scale =", df_long$scale_value)
+  
+  # create plot
+  p <- ggplot(df_long, aes(x = x, y = density, 
+                           color = factor(scale_label, levels = paste("scale =", sort(unique(df_long$scale_value)))))) +
+    geom_line(size = 1) +
+    scale_color_viridis_d(option = "C", begin = 0, end = 0.9) +
+    labs(
+      title = "",
+      x = "Effect size (d)",
+      y = "Density",
+      color = ""
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "top",
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 10),
+      axis.title = element_text(size = 10),
+      axis.text = element_text(size = 10)
+    )
+  
+  # add vertical lines 
+  if (!is.null(highlight_y)) {
+    for (y in highlight_y) {
+      p <- p + 
+        geom_vline(xintercept = y, linetype = "dashed", color = "darkgray") +
+        geom_vline(xintercept = -y, linetype = "dashed", color = "darkgray") +
+        annotate("text", x = y + 0.1, y = max(df_long$density) * 0.5, label = paste("y =", y), hjust = 0) +
+        annotate("text", x = -y - 0.1, y = max(df_long$density) * 0.5, label = paste("y = -", y), hjust = 1)
+    }
+  }
+  
+  # add shaded region
+  if (!is.null(highlight_y)) {
+    
+    # create data for shading
+    for (y in highlight_y) {
+      # lower extreme
+      lower_extreme <- data.frame(
+        x = seq(x_range[1], -y, by = 0.01)
+      )
+      # upper extreme
+      upper_extreme <- data.frame(
+        x = seq(y, x_range[2], by = 0.01)
+      )
+      
+      # add shading
+      p <- p + 
+        geom_ribbon(data = lower_extreme, 
+                    aes(x = x, ymin = 0, 
+                        ymax = dcauchy(x, location, min(scales))),
+                    fill = "lightgray", alpha = 0.3, inherit.aes = FALSE) +
+        geom_ribbon(data = upper_extreme, 
+                    aes(x = x, ymin = 0, 
+                        ymax = dcauchy(x, location, min(scales))),
+                    fill = "lightgray", alpha = 0.3, inherit.aes = FALSE)
+    }
+  }
+  
+  return(p)
+}
+
+# create plot
+p <- plot_cauchy(
+  scales = c(scale_table$`Cohen's d >0.2`[2], 
+             scale_table$`Cohen's d >0.2`[3], 
+             scale_table$`Cohen's d >0.2`[4], 
+             scale_table$`Cohen's d >0.2`[5],
+             0.707), # default prior in Bayesfactor ttestBF
+  highlight_y = c(0.2)
+) + theme_custom()
+
+# output plot
+print(p)
+
+ggsave(plot = p, filename = "cauchy_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+```
+
+@visualise-cauchy illustrates that with smaller scale parameters, the distributions become more peaked around zero and assign smaller probabilities to extreme values. For example, the Cauchy distribution with the scale parameter set to `r sprintf("%.3f", scale_table[[1]][2])` assigns 10% probability to values larger than 0.2. Let's examine the outcomes of the statistical test performed, when using a range of different scale parameters.
+
+## Sensitivity Analysis 1: Prior distributions
+
+The below performs the sensitivity analyses for the Bayesfactor of the main test of this research: hypothesis 2. I will visualise the effect of different prior specifications on the returned Bayesfactor, and subsequently our interpretation. We will sample from a range of 0.05 to 1.
+
+```{r}
+#|label: compute-cauchy
+
+val <- pcauchy(abs(.2), 0, 0.05)
+```
+
+This lower limit of 0.05 assigns `r sprintf("%.3f%%", (1 - val) * 100)` prior probability to values more extreme than 0.2.
+
+### Hypothesis 1
+
+```{r}
+#|label: sensitivity-analysis-scale-h1
+
+# scale vector for sensitivity analysis
+bf_scales <- seq(0.05, 1, 0.01)
+
+# compute bayes factors across scale vector
+bf_results <- purrr::map_dfr(bf_scales, function(r) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = data_main$a_tiktok,
+    y = data_main$a_netflix,
+    paired = TRUE,
+    rscale = r,
+  )
+  
+  data.frame(r_scale = r, bf = BayesFactor::extractBF(bf)$bf)
+  
+})
+
+# evidence categories
+evidence_category <- cut(bf_results$bf, 
+                        breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+                        labels = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+                                  "Moderate", "Strong", "Extreme"),
+                        include.lowest = TRUE)
+
+bf_results <- data.frame(
+  r_scale = bf_results$r_scale,
+  bayes_factor = bf_results$bf,
+  evidence_level = evidence_category
+)
+
+summary_bf <- summary(bf_results$bayes_factor)
+formatC(summary_bf, format = "f", digits = 3)
+
+p1 <- ggplot2::ggplot(bf_results, aes(x = r_scale, y = bayes_factor, color = evidence_level)) +
+  geom_line(color = "gray") +  
+  # add points colored by evidence level
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +    
+  # custom color scale for bidirectional evidence
+  scale_color_manual(
+  name = "Evidence",
+  values = c(
+    "Inconclusive" = "grey",
+    "Moderate" = viridis_colors[2],
+    "Strong" = viridis_colors[3],
+    "Extreme" = viridis_colors[4]
+  ),
+  breaks = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+             "Moderate", "Strong", "Extreme")
+  ) +
+  geom_vline(xintercept = 1/3, linetype="dotted", color = "grey", size= 1) +
+  labs(
+    x = "Prior scale (r)",
+    y = "Bayes Factor (BF10)",
+    color = "Bayes\nFactor"  
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") + 
+  theme_custom() + 
+  scale_x_continuous(limits = c(0, max(bf_scales)), breaks = seq(0, max(bf_scales), length.out = 5))
+
+ggsave(plot = p1, filename = "h1_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+
+print(p1)
+```
+
+### Hypothesis 2
+
+```{r}
+#|label: sensitivity-analysis-scale-h2
+
+# scale vector for sensitivity analysis
+bf_scales <- seq(0.05, 1, 0.01)
+
+# compute bayes factors across scale vector
+bf_results <- purrr::map_dfr(bf_scales, function(r) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = data_main$wl_tiktok,
+    y = data_main$wl_netflix,
+    paired = TRUE,
+    rscale = r,
+  )
+  
+  data.frame(r_scale = r, bf = BayesFactor::extractBF(bf)$bf)
+  
+})
+
+# evidence categories
+evidence_category <- cut(bf_results$bf, 
+                        breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+                        labels = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+                                  "Moderate", "Strong", "Extreme"),
+                        include.lowest = TRUE)
+
+bf_results <- data.frame(
+  r_scale = bf_results$r_scale,
+  bayes_factor = bf_results$bf,
+  evidence_level = evidence_category
+)
+
+summary_bf <- summary(bf_results$bayes_factor)
+formatC(summary_bf, format = "f", digits = 3)
+
+p2 <- ggplot2::ggplot(bf_results, aes(x = r_scale, y = bayes_factor, color = evidence_level)) +
+  geom_line(color = "gray") +  
+  # add points colored by evidence level
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +    
+  # custom color scale for bidirectional evidence
+  scale_color_manual(
+  name = "Evidence",
+  values = c(
+    "Inconclusive" = "grey",
+    "Moderate" = viridis_colors[2],
+    "Strong" = viridis_colors[3],
+    "Extreme" = viridis_colors[4]
+  ),
+  breaks = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+             "Moderate", "Strong", "Extreme")
+  ) +
+  geom_vline(xintercept = 1/3, linetype="dotted", color = "grey", size= 1) +
+  labs(
+    x = "Prior scale (r)",
+    y = "Bayes Factor (BF10)",
+    color = "Bayes\nFactor"  
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") + 
+  theme_custom() +
+  scale_x_continuous(limits = c(0, max(bf_scales)), breaks = seq(0, max(bf_scales), length.out = 5))
+
+ggsave(plot = p2, filename = "h2_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+
+print(p2)
+```
+
+The above plot illustrates the returned Bayesfactors across the range of prior specifications. Including extremely conservative prior distributions, the smallest returned Bayesfactor is `r sprintf("%.3f", min(bf_results$bayes_factor))`. **The average returned Bayesfactor across the range of prior scale parameters examined is `r sprintf("%.3f", mean(bf_results$bayes_factor))`**, with a median of `r sprintf("%.3f", median(bf_results$bayes_factor))`. Therefore, there is extreme evidence in favour of the alternative hypothesis, which posits that the *wanting-liking* dissociation is different between the TikTok and Netflix conditions.
+
+### Hypothesis 3
+
+```{r}
+#|label: sensitivity-analysis-scale-h3
+
+# scale vector for sensitivity analysis
+bf_scales <- seq(0.05, 1, 0.01)
+
+# compute bayes factors across scale vector
+bf_results <- purrr::map_dfr(bf_scales, function(r) {
+  
+  bf <- BayesFactor::correlationBF(
+  x = data_main$wl_tiktok,
+  y = data_main$bsmas_tiktok_total,
+  rscale = r
+  )
+  
+  data.frame(r_scale = r, bf = BayesFactor::extractBF(bf)$bf)
+  
+})
+
+# evidence categories
+evidence_category <- cut(bf_results$bf, 
+                        breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+                        labels = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+                                  "Moderate", "Strong", "Extreme"),
+                        include.lowest = TRUE)
+
+bf_results <- data.frame(
+  r_scale = bf_results$r_scale,
+  bayes_factor = bf_results$bf,
+  evidence_level = evidence_category
+)
+
+summary_bf <- summary(bf_results$bayes_factor)
+formatC(summary_bf, format = "f", digits = 3)
+
+p3 <- ggplot2::ggplot(bf_results, aes(x = r_scale, y = bayes_factor, color = evidence_level)) +
+  geom_line(color = "gray") +  
+  # add points colored by evidence level
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +    
+  # custom color scale for bidirectional evidence
+  scale_color_manual(
+  name = "Evidence",
+  values = c(
+    "Inconclusive" = "grey",
+    "Moderate" = viridis_colors[2],
+    "Strong" = viridis_colors[3],
+    "Extreme" = viridis_colors[4]
+  ),
+  breaks = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+             "Moderate", "Strong", "Extreme"),
+  drop = FALSE
+  ) +
+  geom_vline(xintercept = 1/3, linetype="dotted", color = "grey", size= 1) +
+  labs(
+    x = "Prior scale (r)",
+    y = "Bayes Factor (BF10)",
+    color = "Bayes\nFactor"  
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") + 
+  theme_custom() + 
+  scale_x_continuous(limits = c(0, max(bf_scales)), breaks = seq(0, max(bf_scales), length.out = 5))
+
+# create dummy plot to include legend in merged version
+dummy_data <- data.frame(
+  x = 1:4,
+  y = 1:4,
+  Evidence_Level = c("Extreme", "Strong", "Moderate", "Inconclusive")
+)
+
+dummy_plot <- ggplot(dummy_data, aes(x = x, y = y, color = Evidence_Level)) +
+  geom_point() +
+  scale_color_manual(
+    name = "Evidence",
+    values = c(
+      "Inconclusive" = "grey",
+      "Moderate" = viridis_colors[2],
+      "Strong" = viridis_colors[3],
+      "Extreme" = viridis_colors[4]
+      ),
+    breaks = c("Extreme", "Strong", "Moderate", "Inconclusive"),
+    drop = FALSE)  +
+  guides(linetype = "none", color = guide_legend(direction = "horizontal", title.position = "left"))
+  
+
+# Extract legend from dummy plot (this guarantees all colors)
+legend_complete <- get_legend(dummy_plot)
+
+print(p3)
+
+ggsave(plot = p3, filename = "h3_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+
+# merge sensitivity analysis plots
+hr_sens <- ggpubr::ggarrange(
+  p1 + labs(x = ""), 
+  p2 + labs(y = ""), 
+  p3 + labs(x = "", y = "") + theme(legend.position = "none"),
+  ncol = 3, 
+  labels = c("A", "B", "C"),
+  common.legend = TRUE,
+  legend.grob = legend_complete,
+  legend = "bottom"
+) +  guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  )
+
+ggsave(plot = hr_sens, filename = "analyses_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"),
+       dpi = 800, width = 12, height = 4, bg = "white")
+```
+
+## Evidence accumulation
+
+```{r}
+#| label: evidence-accumulation
+#| fig-cap: "Bayes Factor accumulation for Hypotheses"
+#| fig-align: center
+#| message: false
+#| warning: false
+#| out-width: "90%"
+
+# define shared constants
+common_ylim  <- c(1/100, 125)
+common_breaks <- c(1/100, 1/10, 1/3, 1, 3, 10, 100)
+common_labels <- c("1/100", "1/10", "1/3", "1", "3", "10", "100")
+
+# shared y scaling
+shared_y_scale <- function() {
+  scale_y_log10(
+    breaks = common_breaks,
+    labels = common_labels,
+    limits = common_ylim,
+    expand = expansion(mult = c(0.02, 0.05))
+  )
+}
+
+# shared colour scale
+shared_color_scale <- function() {
+  scale_color_manual(
+    name = "Evidence",
+    values = c(
+      "Inconclusive" = "grey",
+      "Moderate"     = viridis_colors[4],
+      "Strong"       = viridis_colors[3],
+      "Extreme"      = viridis_colors[2]
+    ),
+    breaks = c("Extreme", "Strong", "Moderate", "Inconclusive")
+  )
+}
+
+## HYPOTHESIS 1
+set.seed(123)
+data_shuffled <- data_main[sample(nrow(data_main)), ]
+
+bayes_factors <- c()
+for (i in 1:(nrow(data_shuffled) - 19)) {
+  data_subset  <- data_shuffled[1:(i + 19), ]
+  bf           <- BayesFactor::ttestBF(x = data_subset$a_tiktok, y = data_subset$a_netflix, paired = TRUE, rscale = 1/3)
+  bayes_factors[i] <- extractBF(bf)$bf
+}
+
+evidence_category <- cut(bayes_factors,
+  breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+  labels = c("Extreme", "Strong", "Moderate", "Inconclusive",
+             "Moderate", "Strong", "Extreme"),
+  include.lowest = TRUE)
+
+n_participants <- 20:nrow(data_shuffled)
+plot_data_h1   <- data.frame(n_participants, bayes_factor = bayes_factors, evidence_level = evidence_category)
+final_bf_h1    <- sprintf("%.3f", tail(bayes_factors, 1))
+
+p_accum_h1 <- ggplot(plot_data_h1, aes(x = n_participants, y = bayes_factor)) +
+  geom_hline(aes(yintercept = 1,     linetype = "Inconclusive"), color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 3,     linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 10,    linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 100,   linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/3,   linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/10,  linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/100, linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_line(color = "grey60", size = 1, alpha = 0.6) +
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +
+  # top-left anchor: x = -Inf → left edge, y = Inf → top edge
+  annotate("text",
+           x = -Inf, y = 1/100,
+           label    = paste0("Final BF = ", final_bf_h1),
+           hjust    = -0.1, vjust = -0.8,
+           color    = "black", size = 3.8, fontface = "italic") +
+  shared_y_scale() +
+  shared_color_scale() +
+  scale_linetype_manual(
+    name   = "Thresholds",
+    values = c("Inconclusive" = "dashed", "Moderate" = "dashed",
+               "Strong"       = "dashed", "Extreme"  = "dashed"),
+    breaks = c("Inconclusive", "Moderate", "Strong", "Extreme")) +
+  theme_bw() + theme_custom() +
+    guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  ) +
+  labs(x = "Participants", y = "Bayes Factor (BF10)", title = "", subtitle = "")
+
+## HYPOTHESIS 2
+set.seed(123)
+data_shuffled <- data_main[sample(nrow(data_main)), ]
+
+bayes_factors <- c()
+for (i in 1:(nrow(data_shuffled) - 19)) {
+  data_subset  <- data_shuffled[1:(i + 19), ]
+  bf           <- BayesFactor::ttestBF(x = data_subset$wl_tiktok, y = data_subset$wl_netflix, paired = TRUE, rscale = 1/3)
+  bayes_factors[i] <- extractBF(bf)$bf
+}
+
+evidence_category <- cut(bayes_factors,
+  breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+  labels = c("Extreme", "Strong", "Moderate", "Inconclusive",
+             "Moderate", "Strong", "Extreme"),
+  include.lowest = TRUE)
+
+n_participants <- 20:nrow(data_shuffled)
+plot_data_h2   <- data.frame(n_participants, bayes_factor = bayes_factors, evidence_level = evidence_category)
+final_bf_h2    <- sprintf("%.3f", tail(bayes_factors, 1))
+
+p_accum_h2 <- ggplot(plot_data_h2, aes(x = n_participants, y = bayes_factor)) +
+  geom_hline(aes(yintercept = 1,     linetype = "Inconclusive"), color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 3,     linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 10,    linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 100,   linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/3,   linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/10,  linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/100, linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_line(color = "grey60", size = 1, alpha = 0.6) +
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +
+ annotate("text",
+           x = -Inf, y = 1/100,
+           label    = paste0("Final BF = ", final_bf_h2),
+           hjust    = -0.1, vjust = -0.8,       
+           color    = "black", size = 3.8, fontface = "italic") + 
+  shared_y_scale() +
+  shared_color_scale() +
+  scale_linetype_manual(
+    name   = "Thresholds",
+    values = c("Inconclusive" = "dashed", "Moderate" = "dashed",
+               "Strong"       = "dashed", "Extreme"  = "dashed"),
+    breaks = c("Inconclusive", "Moderate", "Strong", "Extreme")) +
+  theme_bw() + theme_custom() +
+    guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  ) +
+  labs(x = "Participants", y = "Bayes Factor (BF10)", title = "", subtitle = "")
+
+## HYPOTHESIS 3
+set.seed(123)
+data_shuffled <- data_main[sample(nrow(data_main)), ]
+
+bayes_factors <- c()
+for (i in 1:(nrow(data_shuffled) - 19)) {
+  data_subset  <- data_shuffled[1:(i + 19), ]
+  bf           <- BayesFactor::correlationBF(x = data_subset$wl_tiktok, y = data_subset$bsmas_tiktok_total, rscale = 1/3)
+  bayes_factors[i] <- extractBF(bf)$bf
+}
+
+evidence_category <- cut(bayes_factors,
+  breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+  labels = c("Extreme", "Strong", "Moderate", "Inconclusive",
+             "Moderate", "Strong", "Extreme"),
+  include.lowest = TRUE)
+
+n_participants <- 20:nrow(data_shuffled)
+plot_data_h3   <- data.frame(n_participants, bayes_factor = bayes_factors, evidence_level = evidence_category)
+final_bf_h3    <- sprintf("%.3f", tail(bayes_factors, 1))
+
+p_accum_h3 <- ggplot(plot_data_h3, aes(x = n_participants, y = bayes_factor)) +
+  geom_hline(aes(yintercept = 1,     linetype = "Inconclusive"), color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 3,     linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 10,    linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 100,   linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/3,   linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/10,  linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/100, linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_line(color = "grey60", size = 1, alpha = 0.6) +
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +
+  annotate("text",
+           x = -Inf, y = 1/100,
+           label    = paste0("Final BF = ", final_bf_h3),
+           hjust    = -0.1, vjust = -0.8,        
+           color    = "black", size = 3.8, fontface = "italic") + 
+  shared_y_scale() +
+  shared_color_scale() +
+  scale_linetype_manual(
+    name   = "Thresholds",
+    values = c("Inconclusive" = "dashed", "Moderate" = "dashed",
+               "Strong"       = "dashed", "Extreme"  = "dashed"),
+    breaks = c("Inconclusive", "Moderate", "Strong", "Extreme")) +
+  theme_bw() + theme_custom() +
+    guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  ) +
+  labs(x = "Participants", y = "Bayes Factor (BF10)", title = "", subtitle = "")
+
+# COMBINED FIGURE
+accum_legend <- get_legend(p_accum_h2)
+
+accum_all <- ggpubr::ggarrange(
+  p_accum_h1 + labs(x = ""),
+  p_accum_h2 + labs(y = ""),
+  p_accum_h3 + labs(y = "", x = ""),
+  ncol = 3, labels = c("A", "B", "C"),
+  common.legend = TRUE, legend.grob = accum_legend, legend = "bottom"
+)
+
+print(accum_all)
+
+ggsave(plot = accum_all, filename = "evidence_accumulation.png", device = "png",
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"),
+       dpi = 600, width = 12, height = 5, bg = "white")
+```
+
+## Sensitivity Analysis 3: Exclusion criteria
+
+We preregistered several criteria based on which to exclude participants. These criteria were designed to detect participants who 1) failed to comply to the experimental procedures in meaningful ways that could affect the validity of our manipulation or other aspects of the design, or 2) were inattentive. Participants whose responses suggested they may not have complied with aspects of the design were given the opportunity to provide more detail. In the main manuscript, we considered these text responses in our decision of who to exclude from the analyses in order to ensure that we did not systematically exclude participants who may have been much more strict with themselves (i.e., threshold at which they report having switched a finger being they switched the finger once or twice) or misunderstood the question.
+
+In the below, we report the main results for the different data subsets:
+
+(1) Full dataset: includes all participants for which we have data from both sessions.
+(2) Main dataset: includes the dataset used for the analyses in the main manuscript.
+(3) Strict dataset: excludes all participants who indicated they had not complied to parts of the experiment, or who failed the preregistered attention check criteria (i.e., both hard or single simple catch question failed).
+
+```{r}
+#| label: dataset-versions-s2
+
+# full dataset
+dat_full <- data_params
+
+# main dataset
+dat_main <- data_params |>
+  dplyr::filter(watch_tiktok_compliance == TRUE) |> # exclude TikTok non-compliers
+  dplyr::filter(subj_id != p_excl) # exclude Netflix non-compliers
+  
+# strict dataset
+dat_strict <- data_params |>
+  dplyr::filter(watch_tiktok_compliance == TRUE) |>
+  dplyr::filter(watch_netflix_compliance == TRUE) |>
+  dplyr::filter(task_tiktok_compliance == TRUE) |>
+  dplyr::filter(task_netflix_compliance == TRUE)
+```
+
+After creating the relevant data subsets, let's perform the Bayesian analyses for Hypothesis 1, 2, and 3.
+
+```{r}
+#| label: data-sens-h1
+#| fig-cap: "Bayes Factors for Hypothesis 1 across different data subsets"
+#| fig-align: center
+#| message: false
+#| warning: false
+
+
+# dataset list
+datasets <- list(
+  "dat_full" = dat_full,
+  "dat_main" = dat_main, 
+  "dat_strict" = dat_strict
+)
+
+# compute bayes factors across datasets
+bf_results <- purrr::map_dfr(datasets, function(dat) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = dat$a_tiktok,
+    y = dat$a_netflix,
+    paired = TRUE,
+    rscale = 1/3
+  )
+  
+  data.frame(bf = BayesFactor::extractBF(bf)$bf,
+             err = BayesFactor::extractBF(bf)$error
+             )
+  
+}, .id = "dataset")
+
+h1_data_sens <- bf_results |>
+  ggplot(aes(x = dataset, y = bf, fill = dataset)) +
+  geom_col(alpha = 0.8, color = "grey", width = 0.5) +
+  labs(
+    x = "Dataset",
+    y = "Bayes Factor (BF10)"
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "B", begin = .3, end = .7) +
+  theme_custom() +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    "dat_full"   = "Full",
+    "dat_main"   = "Main",
+    "dat_strict" = "Strict"
+  ))
+
+ggsave(plot = h1_data_sens, filename = "h1_data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 3, height = 4, bg = "white")
+```
+
+The above results suggest that our conclusions are not sensitive to the exclusion decisions. Across all three subsets, the data are more probable under the null hypothesis.
+
+```{r}
+#| label: data-sens-h2
+
+# compute bayes factors across datasets
+bf_results <- purrr::map_dfr(datasets, function(dat) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = dat$wl_tiktok,
+    y = dat$wl_netflix,
+    paired = TRUE,
+    rscale = 1/3
+  )
+  
+  data.frame(bf = BayesFactor::extractBF(bf)$bf,
+             err = BayesFactor::extractBF(bf)$error
+             )
+  
+}, .id = "dataset")
+
+h2_data_sens <- bf_results |>
+  ggplot(aes(x = dataset, y = bf, fill = dataset)) +
+  geom_col(alpha = 0.8, color = "grey", width = 0.5) +
+  labs(
+    x = "Dataset",
+    y = "Bayes Factor (BF10)"
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "B", begin = .3, end = .7) +
+  theme_custom() +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    "dat_full"   = "Full",
+    "dat_main"   = "Main",
+    "dat_strict" = "Strict"
+  ))
+
+ggsave(plot = h2_data_sens, filename = "h2_data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 3, height = 4, bg = "white")
+```
+
+The above suggests that the interpretation of our results is not sensitive to the exclusion criteria, and that across subsets, we find the data to be much more likely under the alternative hypothesis. The data subset reported in the main paper results in the lowest Bayes Factor when comparing the different subsets.
+
+```{r}
+#| label: data-sens-h3
+
+# compute bayes factors across datasets
+bf_results <- purrr::map_dfr(datasets, function(dat) {
+  
+  bf <- BayesFactor::correlationBF(
+    x = dat$wl_tiktok,
+    y = dat$bsmas_tiktok_total,
+    rscale = 1/3
+  )
+  
+  data.frame(bf = BayesFactor::extractBF(bf)$bf,
+             err = BayesFactor::extractBF(bf)$error
+             )
+  
+}, .id = "dataset")
+
+h3_data_sens <- bf_results |>
+  ggplot(aes(x = dataset, y = bf, fill = dataset)) +
+  geom_col(alpha = 0.8, color = "grey", width = 0.5) +
+  labs(
+    x = "Dataset",
+    y = "Bayes Factor (BF10)"
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "B", begin = .3, end = .7) +
+  theme_custom() +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    "dat_full"   = "Full",
+    "dat_main"   = "Main",
+    "dat_strict" = "Strict"
+  ))
+
+ggsave(plot = h3_data_sens, filename = "h2_data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 3, height = 4, bg = "white")
+
+# merge plots
+
+# create merged plot
+p_data_sens <- ggpubr::ggarrange(
+  h1_data_sens + labs(x = ""),
+  h2_data_sens + labs(y = ""),
+  h3_data_sens + labs(x = "", y = ""),
+  ncol = 3,
+  labels = c("A", "B", "C")
+)
+
+print(p_data_sens)
+
+ggsave(plot = p_data_sens, filename = "data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment1", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 4, bg = "white")
+```
+
+Across the different hypotheses we observe a trend of a larger Bayes Factor for the strict subset. In general, the differences between the different subsets make little difference for the overall conclusions.
