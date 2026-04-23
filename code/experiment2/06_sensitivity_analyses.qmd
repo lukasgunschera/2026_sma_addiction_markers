@@ -1,0 +1,944 @@
+---
+title: "Sensitivity Analyses"
+description: "This document entails sensitivity analyses for the main findings reported."
+author:
+  - name: Lukas Gunschera
+    orcid: 0000-0002-8241-0833
+    email: l.gunschera@outlook.com
+    corresponding: true
+    affiliation:
+      - ref: 1
+affiliations:
+  - id: 1
+    name: University of Cambridge
+    department: Medical Research Council Cognition and Brain Sciences Unit
+format:
+  html:
+    code-fold: true
+    toc: true
+editor: visual
+---
+
+```{r}
+#| label: Setup-document
+#| include: false
+#| message: false
+#| cache: false
+
+# Output options
+is_html <- knitr::is_html_output()
+knitr::opts_chunk$set(
+  eval = TRUE,
+  cache = FALSE,  # disable global caching by default
+  warning = FALSE,
+  error = FALSE,
+  message = FALSE,
+  echo = is_html,
+  fig.width = 7,
+  fig.height = 5,
+  dpi = 300,
+  dev = "ragg_png"  # ragg_png for better performance
+)
+
+source(here::here("code", "00_setup.R"))
+set.seed(777)
+
+library(renv) # load renv package
+renv::restore(project = here::here()) # restore the environment
+
+# load dependencies
+pacman::p_load(gt, zoo, plm, brms, ragg, here, knitr, purrr, dplyr, tidyr, ggpubr, scales, viridis, moments, stringr, rstatix, janitor, ggplot2, ggExtra, rstanarm, gtExtras, cmdstanr, magrittr, hBayesDM, patchwork, ggpattern, bayesplot, tidybayes, lubridate, posterior, bayestestR, BayesFactor, bridgesampling)
+
+# load custom dependencies
+source(here::here("code", "experiment1", "functions", "fun_plots.R"))
+source(here::here("code", "experiment1", "functions", "fun_helper.R"))
+source(here::here("code", "experiment1", "functions", "fun_fit_models.R"))
+source(here::here("code", "experiment1", "functions", "fun_model_preprocess.R"))
+source(here::here("code", "experiment1", "functions", "fun_modeling_cleandata.R"))
+source(here::here("code", "experiment1", "functions", "fun_parameter_estimates.R"))
+source(here::here("code", "experiment1", "functions", "fun_posterior_predictions.R"))
+source(here::here("code", "experiment1", "functions", "fun_model_convergence_check.R"))
+
+viridis_colors <- viridis::viridis(4, option = "magma", begin = 0.3, end = 0.7)
+condition_colors <- viridis::viridis(2, option = "magma", begin = 0.3, end = 0.7)
+```
+
+```{r}
+#| label: render-document
+#| include: false
+
+cat("Document rendered at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+```
+
+Import processed data from file.
+
+```{r}
+#| label: data-import
+
+# load individual-level model parameters from the winning model (m3)
+data_params <- readRDS(here::here("data", "experiment2", "modelling", "parameters", "m3_para_data.RDS"))
+
+# load the full cleaned dataset including trial-level choice data
+data <- readRDS(here::here("data", "experiment2", "processed", "data_clean.RDS"))
+```
+
+## Prior Sensitivity Checks
+
+The analyses reported use the preregistered Cauchy prior with a scale of 1/3, which assigns more weight to smaller effect sizes. To check the robustness of our findings, we also examine our conclusions across a range of different prior specifications. The results of this sensitivity analysis are reported in the following sections.
+
+### Hypothesis 1: Wanting difference between conditions
+
+### Hypothesis 1
+
+```{r}
+#| label: sensitivity-analysis-scale-h1
+#| include: true
+#| echo: false
+#| message: false
+#| warning: false
+
+# scale vector for sensitivity analysis
+bf_scales <- seq(0.05, 1, 0.01)
+
+# compute bayes factors across scale vector
+bf_results <- purrr::map_dfr(bf_scales, function(r) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = data_params$a_baseline,
+    y = data_params$a_devalued,
+    paired = TRUE,
+    rscale = r,
+  )
+  
+  data.frame(r_scale = r, bf = BayesFactor::extractBF(bf)$bf)
+  
+})
+
+# evidence categories
+evidence_category <- cut(bf_results$bf, 
+                        breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+                        labels = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+                                  "Moderate", "Strong", "Extreme"),
+                        include.lowest = TRUE)
+
+bf_results <- data.frame(
+  r_scale = bf_results$r_scale,
+  bayes_factor = bf_results$bf,
+  evidence_level = evidence_category
+)
+
+summary_bf <- summary(bf_results$bayes_factor)
+formatC(summary_bf, format = "f", digits = 3)
+
+p1 <- ggplot2::ggplot(bf_results, aes(x = r_scale, y = bayes_factor, color = evidence_level)) +
+  geom_line(color = "gray") +  
+  # add points colored by evidence level
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +    
+  # custom color scale for bidirectional evidence
+  scale_color_manual(
+  name = "Evidence",
+  values = c(
+    "Inconclusive" = "grey",
+    "Moderate" = viridis_colors[2],
+    "Strong" = viridis_colors[3],
+    "Extreme" = viridis_colors[4]
+  ),
+  breaks = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+             "Moderate", "Strong", "Extreme")
+  ) +
+  geom_vline(xintercept = 1/3, linetype="dotted", color = "grey", size= 1) +
+  labs(
+    x = "Prior scale (r)",
+    y = "Bayes Factor (BF10)",
+    color = "Bayes\nFactor"  
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") + 
+  theme_custom() + 
+  scale_x_continuous(limits = c(0, max(bf_scales)), breaks = seq(0, max(bf_scales), length.out = 5))
+
+ggsave(plot = p1, filename = "h1_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+
+print(p1)
+```
+
+The above figure illustrates that across plausible prior specifications, the data are much more likely under the null compared to the alternative hypothesis. This suggests that our findings are fairly robust to the prior specification and overall, indicate that there is evidence suggesting that wanting does not differ between the baseline and devalued condition.
+
+### Hypothesis 2: Incentive sensitisation
+
+The second hypothesis was that devaluation insensitivity would be more pronounced for individuals who report feeling addicted to TikTok compared controls.
+
+```{r}
+#|label: sensitivity-analysis-scale-h2
+
+# scale vector for sensitivity analysis
+bf_scales <- seq(0.05, 1, 0.01)
+
+# compute bayes factors across scale vector
+bf_results <- purrr::map_dfr(bf_scales, function(r) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = data_params$devaluation_sens[data_params$group == "addiction"],
+    y = data_params$devaluation_sens[data_params$group == "control"],
+    paired = FALSE,
+    rscale = r,
+  )
+  
+  data.frame(r_scale = r, bf = BayesFactor::extractBF(bf)$bf)
+  
+})
+
+# evidence categories
+evidence_category <- cut(bf_results$bf, 
+                        breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+                        labels = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+                                  "Moderate", "Strong", "Extreme"),
+                        include.lowest = TRUE)
+
+bf_results <- data.frame(
+  r_scale = bf_results$r_scale,
+  bayes_factor = bf_results$bf,
+  evidence_level = evidence_category
+)
+
+summary_bf <- summary(bf_results$bayes_factor)
+formatC(summary_bf, format = "f", digits = 3)
+
+p2 <- ggplot2::ggplot(bf_results, aes(x = r_scale, y = bayes_factor, color = evidence_level)) +
+  geom_line(color = "gray") +  
+  # add points colored by evidence level
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +    
+  # custom color scale for bidirectional evidence
+  scale_color_manual(
+  name = "Evidence",
+  values = c(
+    "Inconclusive" = "grey",
+    "Moderate" = viridis_colors[2],
+    "Strong" = viridis_colors[3],
+    "Extreme" = viridis_colors[4]
+  ),
+  breaks = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+             "Moderate", "Strong", "Extreme")
+  ) +
+  geom_vline(xintercept = 1/3, linetype="dotted", color = "grey", size= 1) +
+  labs(
+    x = "Prior scale (r)",
+    y = "Bayes Factor (BF10)",
+    color = "Bayes\nFactor"  
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") + 
+  theme_custom() +
+  scale_x_continuous(limits = c(0, max(bf_scales)), breaks = seq(0, max(bf_scales), length.out = 5))
+
+ggsave(plot = p2, filename = "h2_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+
+print(p2)
+```
+
+The above plot illustrates the returned Bayesfactors for a range of plausible prior specifications. Including extremely conservative prior distributions, the smallest returned Bayesfactor is `r sprintf("%.3f", min(bf_results$bayes_factor))`. **The average returned Bayesfactor across the range of prior scale parameters examined is `r sprintf("%.3f", mean(bf_results$bayes_factor))`**, with a median of `r sprintf("%.3f", median(bf_results$bayes_factor))`. Therefore, our results are robust across prior specifications and suggest that data are similarly likely under the null and alternative hypothesis.
+
+### Hypothesis 2b: Exploratory one-sided
+
+```{r}
+#|label: sensitivity-analysis-scale-h2
+
+bf_scales <- seq(0.05, 1, 0.01)
+
+bf_results <- purrr::map_dfr(bf_scales, function(r) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = data_params$devaluation_sens[data_params$group == "addiction"],
+    y = data_params$devaluation_sens[data_params$group == "control"],
+    paired = FALSE,
+    rscale = r,
+    nullInterval = c(-Inf, 0)  # one-sided: addiction < control
+  )
+  
+  data.frame(r_scale = r, bf = BayesFactor::extractBF(bf)[1, "bf"])
+  
+})
+
+evidence_category <- cut(bf_results$bf, 
+                        breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+                        labels = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+                                  "Moderate", "Strong", "Extreme"),
+                        include.lowest = TRUE)
+
+bf_results <- data.frame(
+  r_scale = bf_results$r_scale,
+  bayes_factor = bf_results$bf,
+  evidence_level = evidence_category
+)
+
+summary_bf <- summary(bf_results$bayes_factor)
+formatC(summary_bf, format = "f", digits = 3)
+
+p2_onesided <- ggplot2::ggplot(bf_results, aes(x = r_scale, y = bayes_factor, color = evidence_level)) +
+  geom_line(color = "gray") +  
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +    
+  scale_color_manual(
+    name = "Evidence",
+    values = c(
+      "Inconclusive" = "grey",
+      "Moderate" = viridis_colors[2],
+      "Strong" = viridis_colors[3],
+      "Extreme" = viridis_colors[4]
+    ),
+    breaks = c("Extreme", "Strong", "Moderate", "Inconclusive")
+  ) +
+  geom_vline(xintercept = 1/3, linetype = "dotted", color = "grey", size = 1) +
+  labs(
+    x = "Prior scale (r)",
+    y = "Bayes Factor (BF10)",  
+    color = "Evidence"  
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") + 
+  theme_custom() +
+  scale_x_continuous(limits = c(0, max(bf_scales)), breaks = seq(0, max(bf_scales), length.out = 5))
+
+ggsave(plot = p2_onesided, filename = "h2_scale_sensitivity_onesided.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+
+print(p2_onesided)
+```
+
+The one-sided results are more conclusive and better aligned with the direction of the preregistered hypothesis (albeit exploratory, as a two-sided test was preregistered).
+
+### Hypothesis 3: Devaluation sensitivity and self-reported addiction
+
+The third hypothesis suggested that devaluation sensitivity would be negatively associated with self-reported addiction severity, as measured by the BSMAS total score. The following plot illustrates the results of the sensitivity analysis for this hypothesis.
+
+```{r}
+#|label: sensitivity-analysis-scale-h3
+
+# scale vector for sensitivity analysis
+bf_scales <- seq(0.05, 1, 0.01)
+
+# compute bayes factors across scale vector
+bf_results <- purrr::map_dfr(bf_scales, function(r) {
+  
+  bf <- BayesFactor::correlationBF(
+  x = data_params$devaluation_sens,
+  y = data_params$bsmas_sum,
+  rscale = r
+  )
+  
+  data.frame(r_scale = r, bf = BayesFactor::extractBF(bf)$bf)
+  
+})
+
+# evidence categories
+evidence_category <- cut(bf_results$bf, 
+                        breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+                        labels = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+                                  "Moderate", "Strong", "Extreme"),
+                        include.lowest = TRUE)
+
+bf_results <- data.frame(
+  r_scale = bf_results$r_scale,
+  bayes_factor = bf_results$bf,
+  evidence_level = evidence_category
+)
+
+summary_bf <- summary(bf_results$bayes_factor)
+formatC(summary_bf, format = "f", digits = 3)
+
+p3 <- ggplot2::ggplot(bf_results, aes(x = r_scale, y = bayes_factor, color = evidence_level)) +
+  geom_line(color = "gray") +  
+  # add points colored by evidence level
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +    
+  # custom color scale for bidirectional evidence
+  scale_color_manual(
+  name = "Evidence",
+  values = c(
+    "Inconclusive" = "grey",
+    "Moderate" = viridis_colors[2],
+    "Strong" = viridis_colors[3],
+    "Extreme" = viridis_colors[4]
+  ),
+  breaks = c("Extreme", "Strong", "Moderate", "Inconclusive", 
+             "Moderate", "Strong", "Extreme"),
+  drop = FALSE
+  ) +
+  geom_vline(xintercept = 1/3, linetype="dotted", color = "grey", size= 1) +
+  labs(
+    x = "Prior scale (r)",
+    y = "Bayes Factor (BF10)",
+    color = "Bayes\nFactor"  
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") + 
+  theme_custom() + 
+  scale_x_continuous(limits = c(0, max(bf_scales)), breaks = seq(0, max(bf_scales), length.out = 5))
+
+# create dummy plot to include legend in merged version
+dummy_data <- data.frame(
+  x = 1:4,
+  y = 1:4,
+  Evidence_Level = c("Extreme", "Strong", "Moderate", "Inconclusive")
+)
+
+dummy_plot <- ggplot(dummy_data, aes(x = x, y = y, color = Evidence_Level)) +
+  geom_point() +
+  scale_color_manual(
+    name = "Evidence",
+    values = c(
+      "Inconclusive" = "grey",
+      "Moderate" = viridis_colors[2],
+      "Strong" = viridis_colors[3],
+      "Extreme" = viridis_colors[4]
+      ),
+    breaks = c("Extreme", "Strong", "Moderate", "Inconclusive"),
+    drop = FALSE)  +
+  guides(linetype = "none", color = guide_legend(direction = "horizontal", title.position = "left"))
+  
+
+# Extract legend from dummy plot (this guarantees all colors)
+legend_complete <- get_legend(dummy_plot)
+
+print(p3)
+
+ggsave(plot = p3, filename = "h3_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 5, bg = "white")
+
+# merge sensitivity analysis plots
+hr_sens <- ggpubr::ggarrange(
+  p1 + labs(x = ""), 
+  p2 + labs(y = ""), 
+  p3 + labs(x = "", y = "") + theme(legend.position = "none"),
+  ncol = 3, 
+  labels = c("A", "B", "C"),
+  common.legend = TRUE,
+  legend.grob = legend_complete,
+  legend = "bottom"
+) +  guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  )
+
+ggsave(plot = hr_sens, filename = "analyses_scale_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"),
+       dpi = 800, width = 12, height = 4, bg = "white")
+```
+
+## Evidence accumulation
+
+We examine the evidence accumulation.
+
+```{r}
+#| label: evidence-accumulation
+#| fig-cap: "Bayes Factor accumulation for Hypotheses"
+#| fig-align: center
+#| message: false
+#| warning: false
+#| out-width: "90%"
+
+# define shared constants
+common_ylim  <- c(1/100, 125)
+common_breaks <- c(1/100, 1/10, 1/3, 1, 3, 10, 100)
+common_labels <- c("1/100", "1/10", "1/3", "1", "3", "10", "100")
+
+# shared y scaling
+shared_y_scale <- function() {
+  scale_y_log10(
+    breaks = common_breaks,
+    labels = common_labels,
+    limits = common_ylim,
+    expand = expansion(mult = c(0.02, 0.05))
+  )
+}
+
+# shared colour scale
+shared_color_scale <- function() {
+  scale_color_manual(
+    name = "Evidence",
+    values = c(
+      "Inconclusive" = "grey",
+      "Moderate"     = viridis_colors[4],
+      "Strong"       = viridis_colors[3],
+      "Extreme"      = viridis_colors[2]
+    ),
+    breaks = c("Extreme", "Strong", "Moderate", "Inconclusive")
+  )
+}
+
+## HYPOTHESIS 1
+set.seed(123)
+data_shuffled <- data_params[sample(nrow(data_params)), ]
+
+bayes_factors <- c()
+for (i in 1:(nrow(data_shuffled) - 19)) {
+  data_subset  <- data_shuffled[1:(i + 19), ]
+  bf           <- BayesFactor::ttestBF(x = data_subset$a_baseline, y = data_subset$a_devalued, paired = TRUE, rscale = 1/3)
+  bayes_factors[i] <- extractBF(bf)$bf
+}
+
+evidence_category <- cut(bayes_factors,
+  breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+  labels = c("Extreme", "Strong", "Moderate", "Inconclusive",
+             "Moderate", "Strong", "Extreme"),
+  include.lowest = TRUE)
+
+n_participants <- 20:nrow(data_shuffled)
+plot_data_h1   <- data.frame(n_participants, bayes_factor = bayes_factors, evidence_level = evidence_category)
+final_bf_h1    <- sprintf("%.3f", tail(bayes_factors, 1))
+
+p_accum_h1 <- ggplot(plot_data_h1, aes(x = n_participants, y = bayes_factor)) +
+  geom_hline(aes(yintercept = 1,     linetype = "Inconclusive"), color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 3,     linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 10,    linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 100,   linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/3,   linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/10,  linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/100, linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_line(color = "grey60", size = 1, alpha = 0.6) +
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +
+  # top-left anchor: x = -Inf → left edge, y = Inf → top edge
+  annotate("text",
+           x = -Inf, y = 1/100,
+           label    = paste0("Final BF = ", final_bf_h1),
+           hjust    = -0.1, vjust = -0.8,
+           color    = "black", size = 3.8, fontface = "italic") +
+  shared_y_scale() +
+  shared_color_scale() +
+  scale_linetype_manual(
+    name   = "Thresholds",
+    values = c("Inconclusive" = "dashed", "Moderate" = "dashed",
+               "Strong"       = "dashed", "Extreme"  = "dashed"),
+    breaks = c("Inconclusive", "Moderate", "Strong", "Extreme")) +
+  theme_bw() + theme_custom() +
+    guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  ) +
+  labs(x = "Participants", y = "Bayes Factor (BF10)", title = "", subtitle = "")
+
+## HYPOTHESIS 2
+set.seed(123)
+data_shuffled <- data_params[sample(nrow(data_params)), ]
+
+bayes_factors <- c()
+for (i in 1:(nrow(data_shuffled) - 19)) {
+  data_subset  <- data_shuffled[1:(i + 19), ]
+  bf           <- BayesFactor::ttestBF(x = data_subset$devaluation_sens[data_subset$group == "addiction"], y = data_subset$devaluation_sens[data_subset$group == "control"], paired = FALSE, rscale = 1/3)
+  bayes_factors[i] <- extractBF(bf)$bf
+}
+
+evidence_category <- cut(bayes_factors,
+  breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+  labels = c("Extreme", "Strong", "Moderate", "Inconclusive",
+             "Moderate", "Strong", "Extreme"),
+  include.lowest = TRUE)
+
+n_participants <- 20:nrow(data_shuffled)
+plot_data_h2   <- data.frame(n_participants, bayes_factor = bayes_factors, evidence_level = evidence_category)
+final_bf_h2    <- sprintf("%.3f", tail(bayes_factors, 1))
+
+p_accum_h2 <- ggplot(plot_data_h2, aes(x = n_participants, y = bayes_factor)) +
+  geom_hline(aes(yintercept = 1,     linetype = "Inconclusive"), color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 3,     linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 10,    linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 100,   linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/3,   linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/10,  linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/100, linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_line(color = "grey60", size = 1, alpha = 0.6) +
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +
+ annotate("text",
+           x = -Inf, y = 1/100,
+           label    = paste0("Final BF = ", final_bf_h2),
+           hjust    = -0.1, vjust = -0.8,       
+           color    = "black", size = 3.8, fontface = "italic") + 
+  shared_y_scale() +
+  shared_color_scale() +
+  scale_linetype_manual(
+    name   = "Thresholds",
+    values = c("Inconclusive" = "dashed", "Moderate" = "dashed",
+               "Strong"       = "dashed", "Extreme"  = "dashed"),
+    breaks = c("Inconclusive", "Moderate", "Strong", "Extreme")) +
+  theme_bw() + theme_custom() +
+    guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  ) +
+  labs(x = "Participants", y = "Bayes Factor (BF10)", title = "", subtitle = "")
+
+## HYPOTHESIS 3
+set.seed(123)
+data_shuffled <- data_params[sample(nrow(data_params)), ]
+
+bayes_factors <- c()
+for (i in 1:(nrow(data_shuffled) - 19)) {
+  data_subset  <- data_shuffled[1:(i + 19), ]
+  bf           <- BayesFactor::correlationBF(x = data_subset$devaluation_sens, y = data_subset$bsmas_sum, rscale = 1/3)
+  bayes_factors[i] <- extractBF(bf)$bf
+}
+
+evidence_category <- cut(bayes_factors,
+  breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+  labels = c("Extreme", "Strong", "Moderate", "Inconclusive",
+             "Moderate", "Strong", "Extreme"),
+  include.lowest = TRUE)
+
+n_participants <- 20:nrow(data_shuffled)
+plot_data_h3   <- data.frame(n_participants, bayes_factor = bayes_factors, evidence_level = evidence_category)
+final_bf_h3    <- sprintf("%.3f", tail(bayes_factors, 1))
+
+p_accum_h3 <- ggplot(plot_data_h3, aes(x = n_participants, y = bayes_factor)) +
+  geom_hline(aes(yintercept = 1,     linetype = "Inconclusive"), color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 3,     linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 10,    linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 100,   linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/3,   linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/10,  linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/100, linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_line(color = "grey60", size = 1, alpha = 0.6) +
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +
+  annotate("text",
+           x = -Inf, y = 1/100,
+           label    = paste0("Final BF = ", final_bf_h3),
+           hjust    = -0.1, vjust = -0.8,        
+           color    = "black", size = 3.8, fontface = "italic") + 
+  shared_y_scale() +
+  shared_color_scale() +
+  scale_linetype_manual(
+    name   = "Thresholds",
+    values = c("Inconclusive" = "dashed", "Moderate" = "dashed",
+               "Strong"       = "dashed", "Extreme"  = "dashed"),
+    breaks = c("Inconclusive", "Moderate", "Strong", "Extreme")) +
+  theme_bw() + theme_custom() +
+    guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  ) +
+  labs(x = "Participants", y = "Bayes Factor (BF10)", title = "", subtitle = "")
+
+# COMBINED FIGURE
+accum_legend <- get_legend(p_accum_h2)
+
+accum_all <- ggpubr::ggarrange(
+  p_accum_h1 + labs(x = ""),
+  p_accum_h2 + labs(y = ""),
+  p_accum_h3 + labs(y = "", x = ""),
+  ncol = 3, labels = c("A", "B", "C"),
+  common.legend = TRUE, legend.grob = accum_legend, legend = "bottom"
+)
+
+print(accum_all)
+
+ggsave(plot = accum_all, filename = "evidence_accumulation.png", device = "png",
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"),
+       dpi = 800, width = 12, height = 5, bg = "white")
+```
+
+Similar to before, we repeated the accumulation presentation for the one-sided test for Hypothesis 2. The results are reported in the following figure.
+
+```{r}
+#| label: evidence-accumulation-h2-onesided
+#| fig-cap: "Bayes Factor accumulation for Hypothesis 2 (one-sided)"
+#| fig-align: center
+
+set.seed(123)
+data_shuffled <- data_params[sample(nrow(data_params)), ]
+
+bayes_factors <- c()
+for (i in 1:(nrow(data_shuffled) - 19)) {
+  data_subset  <- data_shuffled[1:(i + 19), ]
+  bf           <- BayesFactor::ttestBF(x = data_subset$devaluation_sens[data_subset$group == "addiction"], y = data_subset$devaluation_sens[data_subset$group == "control"], paired = FALSE, rscale = 1/3, nullInterval = c(-Inf, 0))
+  bayes_factors[i] <- extractBF(bf)$bf
+}
+
+evidence_category <- cut(bayes_factors,
+  breaks = c(-Inf, 1/100, 1/10, 1/3, 3, 10, 100, Inf),
+  labels = c("Extreme", "Strong", "Moderate", "Inconclusive",
+             "Moderate", "Strong", "Extreme"),
+  include.lowest = TRUE)
+
+n_participants <- 20:nrow(data_shuffled)
+plot_data_h2_one   <- data.frame(n_participants, bayes_factor = bayes_factors, evidence_level = evidence_category)
+final_bf_h2_one    <- sprintf("%.3f", tail(bayes_factors, 1))
+
+p_accum_h2_one <- ggplot(plot_data_h2_one, aes(x = n_participants, y = bayes_factor)) +
+  geom_hline(aes(yintercept = 1,     linetype = "Inconclusive"), color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 3,     linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 10,    linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 100,   linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/3,   linetype = "Moderate"),     color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/10,  linetype = "Strong"),       color = "grey40", size = 0.5) +
+  geom_hline(aes(yintercept = 1/100, linetype = "Extreme"),      color = "grey40", size = 0.5) +
+  geom_line(color = "grey60", size = 1, alpha = 0.6) +
+  geom_point(aes(color = evidence_level), size = 2.5, alpha = 0.9) +
+ annotate("text",
+           x = -Inf, y = 1/100,
+           label    = paste0("Final BF = ", final_bf_h2),
+           hjust    = -0.1, vjust = -0.8,       
+           color    = "black", size = 3.8, fontface = "italic") + 
+  shared_y_scale() +
+  shared_color_scale() +
+  scale_linetype_manual(
+    name   = "Thresholds",
+    values = c("Inconclusive" = "dashed", "Moderate" = "dashed",
+               "Strong"       = "dashed", "Extreme"  = "dashed"),
+    breaks = c("Inconclusive", "Moderate", "Strong", "Extreme")) +
+  theme_bw() + theme_custom() +
+    guides(
+    linetype = "none",
+    color    = guide_legend(direction = "horizontal", title.position = "left")
+  ) +
+  labs(x = "Participants", y = "Bayes Factor (BF10)", title = "", subtitle = "")
+
+ggarrange(
+  p2_onesided,
+  p_accum_h2_one,
+  ncol = 2, labels = c("A", "B"),
+  common.legend = TRUE, legend.grob = accum_legend, legend = "bottom"
+) |> ggsave(filename = "evidence_accumulation_h2_onesided.png", device = "png",
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"),
+       dpi = 800, width = 12, height = 5, bg = "white")
+```
+
+## Exclusion criteria
+
+We preregistered the criteria based on which to exclude participants. These criteria were designed to detect participants who 1) failed to comply with the experimental procedures in meaningful ways that could affect the validity of our manipulation or other aspects of the design, 2) were inattentive and whose data would not be meaningful, and 3) had incomplete data.
+
+Participants whose responses suggested they may not have complied with all aspects of the design were given the opportunity to provide more detail. Based on previous experience, participants have vastly different thresholds for what they consider a 'violation or noncompliance' and we wanted to make sure not to systematically exclude participants or unnecessarily waste participant time and research resources. For participants who provided additional context, we manually examined the text responses to determine whether the participant should be excluded from the analyses.
+
+In the below, we report the main results for the different data subsets:
+
+(1) Full dataset: includes all participants for which we have complete data.
+(2) Main dataset: dataset included in the main manuscript which applies preregistered exclusion criteria.
+(3) Strict dataset: excludes all participants who indicated some sort of non-compliance or failed the preregistered attention check criteria.
+
+```{r}
+#| label: dataset-full
+
+data_strict <- readRDS(here::here("data", "experiment2", "processed", "data_sensitivity_strict.rds"))
+data_full <- readRDS(here::here("data", "experiment2", "processed", "data_sensitivity_full.rds"))
+data_main <- readRDS(here::here("data", "experiment2", "modelling", "parameters", "m3_para_data.rds"))
+
+id_mapping <- read.csv("/Users/lukasgunschera/Library/CloudStorage/OneDrive/repositories/mac/2026_sma_addiction_markers/data/experiment2/id_mapping.csv")
+
+data_main$subj_id <- id_mapping$anon_id[match(data_main$subj_id, id_mapping$original_id)]
+```
+
+Repeat the model fits on the full dataset.
+
+```{r}
+source(here::here("code", "experiment2", "functions", "fun_plots.R"))
+source(here::here("code", "experiment2", "functions", "fun_helper.R"))
+source(here::here("code", "experiment2", "functions", "fun_fit_models.R"))
+source(here::here("code", "experiment2", "functions", "fun_model_preprocess.R"))
+source(here::here("code", "experiment2", "functions", "fun_model_comparison.R"))
+source(here::here("code", "experiment2", "functions", "fun_modeling_cleandata.R"))
+source(here::here("code", "experiment2", "functions", "fun_parameter_estimates.R"))
+source(here::here("code", "experiment2", "functions", "fun_posterior_predictions.R"))
+source(here::here("code", "experiment2", "functions", "fun_model_convergence_check.R"))
+
+# remove participant with missing trial data (N=1)
+data_full$demographics   <- data_full$demographics[data_full$demographics$subj_id != "P133", ]
+data_full$game           <- data_full$game[data_full$game$subj_id != "P133", ]
+data_full$game_meta      <- data_full$game_meta[data_full$game_meta$subj_id != "P133", ]
+data_full$modelling_data <- data_full$modelling_data[data_full$modelling_data$subjID != "P133", ]
+data_full$tiktok_use     <- data_full$tiktok_use[data_full$tiktok_use$subj_id != "P133", ]
+data_full$questionnaires <- data_full$questionnaires[data_full$questionnaires$subj_id != "P133", ]
+
+data <- data_full 
+
+# fit models for larger dataset
+fit_stan_models("m3_parabolic",  suffix = "_sensitivity")
+
+# format model parameters for comparison
+m3_parabolic_parameters_full <- dplyr::left_join(
+  m3_parabolic_devalued_sensitivity$parameters$individual_params,
+  m3_parabolic_baseline_sensitivity$parameters$individual_params,
+  by = "subj_id",
+  suffix = c("_devalued", "_baseline")
+)
+
+# remove estimate from colnames for conciseness
+colnames(m3_parabolic_parameters_full) <- gsub(
+  "estimate_",
+  "",
+  colnames(m3_parabolic_parameters_full)
+)
+
+# reformat data to add parameters to the participants' data (TODO: FIX FOR NEW FORMAT)
+data_params_full <- data_full$demographics |>
+  dplyr::left_join(m3_parabolic_parameters_full, by = "subj_id") |>
+  dplyr::mutate(
+    devaluation_sens = a_baseline - a_devalued,
+    wl_baseline = a_baseline - liking_b,
+    wl_devalued = a_devalued - liking_d
+  )
+
+data_params_strict <- data_main[data_main$subj_id %in% data_strict$demographics$subj_id, ]
+
+data_params_main <- data_main
+```
+
+After creating the relevant data subsets, let's perform the Bayesian analyses for Hypothesis 1, 2, and 3.
+
+```{r}
+#| label: data-sens-h1
+#| fig-cap: "Bayes Factors for Hypothesis 1 across different data subsets"
+#| fig-align: center
+#| message: false
+#| warning: false
+
+
+# dataset list
+datasets <- list(
+  "dat_full" = data_params_full |> drop_na(a_baseline, a_devalued),
+  "dat_main" = data_params_main |> drop_na(a_baseline, a_devalued), 
+  "dat_strict" = data_params_strict |> drop_na(a_baseline, a_devalued)
+)
+
+# compute bayes factors across datasets
+bf_results <- purrr::map_dfr(datasets, function(dat) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = dat$a_baseline,
+    y = dat$a_devalued,
+    paired = TRUE,
+    rscale = 1/3
+  )
+  
+  data.frame(bf = BayesFactor::extractBF(bf)$bf,
+             err = BayesFactor::extractBF(bf)$error
+             )
+  
+}, .id = "dataset")
+
+h1_data_sens <- bf_results |>
+  ggplot(aes(x = dataset, y = bf, fill = dataset)) +
+  geom_col(alpha = 0.8, color = "grey", width = 0.5) +
+  labs(
+    x = "Dataset",
+    y = "Bayes Factor (BF10)"
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", begin = .3, end = .7) +
+  theme_custom() +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    "dat_full"   = "Full",
+    "dat_main"   = "Main",
+    "dat_strict" = "Strict"
+  ))
+
+ggsave(plot = h1_data_sens, filename = "h1_data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 3, height = 3, bg = "white")
+```
+
+The above results suggest that our conclusions are not sensitive to the exclusion decisions. Across all three subsets, the data are more probable under the null hypothesis.
+
+```{r}
+#| label: data-sens-h2
+
+# compute bayes factors across datasets
+bf_results <- purrr::map_dfr(datasets, function(dat) {
+  
+  bf <- BayesFactor::ttestBF(
+    x = dat$devaluation_sens[dat$group == "addiction"],
+    y = dat$devaluation_sens[dat$group == "control"],
+    paired = FALSE,
+    rscale = 1/3
+  )
+  
+  data.frame(bf = BayesFactor::extractBF(bf)$bf,
+             err = BayesFactor::extractBF(bf)$error
+             )
+  
+}, .id = "dataset")
+
+h2_data_sens <- bf_results |>
+  ggplot(aes(x = dataset, y = bf, fill = dataset)) +
+  geom_col(alpha = 0.8, color = "grey", width = 0.5) +
+  labs(
+    x = "Dataset",
+    y = "Bayes Factor (BF10)"
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", begin = .3, end = .7) +
+  theme_custom() +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    "dat_full"   = "Full",
+    "dat_main"   = "Main",
+    "dat_strict" = "Strict"
+  ))
+
+ggsave(plot = h2_data_sens, filename = "h2_data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 3, height = 3, bg = "white")
+```
+
+The above suggests that the interpretation of our results is not sensitive to the exclusion criteria, and that across subsets, we find the data to be much more likely under the alternative hypothesis. The data subset reported in the main paper results in the lowest Bayes Factor when comparing the different subsets.
+
+```{r}
+#| label: data-sens-h3
+
+# compute bayes factors across datasets
+bf_results <- purrr::map_dfr(datasets, function(dat) {
+  
+  bf <- BayesFactor::correlationBF(
+    x = dat$devaluation_sens,
+    y = dat$bsmas_sum,
+    rscale = 1/3
+  )
+  
+  data.frame(bf = BayesFactor::extractBF(bf)$bf,
+             err = BayesFactor::extractBF(bf)$error
+             )
+  
+}, .id = "dataset")
+
+h3_data_sens <- bf_results |>
+  ggplot(aes(x = dataset, y = bf, fill = dataset)) +
+  geom_col(alpha = 0.8, color = "grey", width = 0.5) +
+  labs(
+    x = "Dataset",
+    y = "Bayes Factor (BF10)"
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", begin = .3, end = .7) +
+  theme_custom() +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    "dat_full"   = "Full",
+    "dat_main"   = "Main",
+    "dat_strict" = "Strict"
+  ))
+
+ggsave(plot = h3_data_sens, filename = "h2_data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 3, height = 3, bg = "white")
+
+# merge plots
+
+# create merged plot
+p_data_sens <- ggpubr::ggarrange(
+  h1_data_sens + labs(x = ""),
+  h2_data_sens + labs(y = ""),
+  h3_data_sens + labs(x = "", y = ""),
+  ncol = 3,
+  labels = c("A", "B", "C")
+)
+
+print(p_data_sens)
+
+ggsave(plot = p_data_sens, filename = "data_sensitivity.png", device = "png", 
+       path = here::here("output", "figures", "experiment2", "analyses_sensitivity"), 
+       dpi = 800, width = 8, height = 4, bg = "white")
+```
+
+Across the different hypotheses we observe a trend of a larger Bayes Factor for the strict subset. In general, the differences between the different subsets make little difference for the overall conclusions.

@@ -1,0 +1,514 @@
+---
+title: "Pilot Analyses"
+description: "This script describes and analyses the pilot data collected online and merges this into a single reproducible output."
+author:
+  - name: Lukas Gunschera
+    orcid: 0000-0002-8241-0833
+    email: l.gunschera@outlook.com
+    corresponding: true
+    affiliation:
+      - ref: 1
+affiliations:
+  - id: 1
+    name: University of Cambridge
+    department: Medical Research Council Cognition and Brain Sciences Unit
+format:
+  html:
+    code-fold: true
+    toc: true
+editor: visual
+---
+
+```{r}
+#| label: setup
+#| include: false
+#| message: false
+#| cache: false
+
+# set parameters and seed
+source(here::here("code", "00_setup.R"))
+
+# load packages
+pacman::p_load(here, gt, zoo, plm, glue, ragg, nlme, knitr, purrr, dplyr, tidyr, Hmisc, viridis,
+               stringr, rstatix, janitor, ggplot2, ggExtra, devtools,
+               gtExtras, magrittr, corrplot, patchwork, extrafont,
+               ggpattern, bayesplot, lubridate, posterior,
+               tidyverse, kableExtra, BayesFactor)
+
+# output options
+is_html <- knitr::is_html_output()
+knitr::opts_chunk$set(
+  eval    = TRUE,
+  cache   = FALSE,
+  warning = FALSE,
+  error   = FALSE,
+  message = FALSE,
+  echo    = is_html,
+  fig.width  = 7,
+  fig.height = 5,
+  dpi = 600,
+  dev = "ragg_png"
+)
+
+# load custom functions
+source(here::here("code", "experiment2", "functions", "fun_plots.R"))
+source(here::here("code", "experiment2", "functions", "fun_helper.R"))
+```
+
+```{r}
+#| label: render-timestamp
+#| echo: false
+
+cat("Document rendered at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+```
+
+## Data
+
+```{r}
+#| label: data-import
+
+# read anonymised participant data
+dat <- readr::read_csv(here::here("data", "pilot", "data_pilot_anon.csv"))
+demo <- readr::read_csv(here::here("data", "pilot", "data_demographics_anon.csv"))
+```
+
+## Participant compliance
+
+The within-subjects pilot was administered online and participants were recruited via Prolific. This limited our control over the experimental setting and we implemented several measures to facilitate and assess participant compliance. For example, the inclusion of a 'compliance check' question at the end of the experiment, asking participants to indicate had they not complied to some of the instructions. It was emphasised that their responses would not affect their payment and would be used to ensure that the data used for analyses are of highest quality.
+
+Below, we examine participant compliance, to determine the validity of our conclusions about the effectiveness of the different tested devaluation manipulations.
+
+```{r}
+#| label: compliance-summary
+
+compliance_summary <- dat |>
+  dplyr::filter(grepl("compliance_confirmation", response)) |>
+  dplyr::mutate(
+    compliance = ifelse(
+      grepl('"compliance_confirmation":"yes"', response),
+      "Yes", "No / Other"
+    )
+  ) |>
+  dplyr::count(compliance) |>
+  dplyr::mutate(`%` = round(n / sum(n) * 100, 1))
+
+n_compliant     <- compliance_summary |> dplyr::filter(compliance == "Yes") |> pull(n)
+n_noncompliant  <- compliance_summary |> dplyr::filter(compliance != "Yes") |> pull(n)
+n_total_compliance <- sum(compliance_summary$n)
+```
+
+```{r}
+#| label: tbl-compliance
+#| tbl-cap: "Participant compliance confirmation responses"
+
+compliance_summary |>
+  dplyr::rename(Compliance = compliance, N = n) |>
+  knitr::kable(align = c("l", "r", "r"))
+```
+
+`r n_compliant` of `r n_total_compliance` participants (`r round(n_compliant / n_total_compliance * 100, 1)`%) indicated compliance with the TikTok setting adjustments and are therefore retained for subsequent analyses.
+
+Let's examine the condition order (Latin square counterbalancing)
+
+```{r}
+rating_dat |>
+  dplyr::group_by(participant_id) |>
+  dplyr::summarise(trial_order = paste(condition_label, collapse = "-")) |>
+  dplyr::count(trial_order)
+```
+
+
+## Pleasantness, wanting, and regret ratings
+
+We asked participants to rate each use session (colour & sound, no colour & sound, colour & no sound, no colour & no sound) on pleasantness, wanting, and regret following completion.
+
+```{r}
+#| label: data-ratings
+#| echo: false
+#| message: false
+#| warning: false
+
+# wrangle slider response data into long format with labelled conditions
+rating_dat <- dat |>
+  dplyr::filter(trial_type == "html-slider-response") |>
+  dplyr::select(
+    participant_id, trial_index, response, block, question
+  ) |>
+  dplyr::mutate(
+    response      = as.numeric(response),
+    question_type = case_when(
+      question == "1" ~ "pleasantness",
+      question == "2" ~ "wanting",
+      question == "3" ~ "regret",
+      TRUE            ~ paste0("question_", question)
+    ),
+    condition = case_when(
+      block == "1" ~ "sound_colour",
+      block == "2" ~ "nosound_colour",
+      block == "3" ~ "sound_nocolour",
+      block == "4" ~ "nosound_nocolour",
+      TRUE         ~ paste0("block_", block)
+    )
+  ) |>
+  dplyr::filter(!is.na(response)) |>
+  dplyr::mutate(
+    sound    = ifelse(str_detect(condition, "nosound"), "off", "on"),
+    colour   = ifelse(str_detect(condition, "nocolour"), "grey", "normal"),
+    participant_id  = factor(participant_id),
+    sound         = factor(sound,   levels = c("on", "off")),
+    colour        = factor(colour,  levels = c("normal", "grey")),
+    question_type = factor(question_type, levels = c("pleasantness", "wanting", "regret")),
+    condition     = factor(condition,
+      levels = c("sound_colour", "nosound_colour", "sound_nocolour", "nosound_nocolour")
+    ),
+    condition_label = case_when(
+      condition == "sound_colour"       ~ "Sound & Colour",
+      condition == "nosound_colour"     ~ "No Sound & Colour",
+      condition == "sound_nocolour"     ~ "Sound & No Colour",
+      condition == "nosound_nocolour"   ~ "No Sound & No Colour"
+    ),
+    condition_label = factor(condition_label,
+      levels = c(
+        "Sound & Colour", "No Sound & Colour",
+        "Sound & No Colour", "No Sound & No Colour"
+      )
+    )
+  )
+```
+
+### Demographics
+
+```{r}
+#| label: demographics-compute
+
+# summarise age and gender from approved participants
+age_summary <- demo |>
+  dplyr::filter(Status == "APPROVED") |>
+  dplyr::summarise(
+    mean_age = round(mean(as.numeric(Age), na.rm = TRUE), 3),
+    sd_age   = round(sd(as.numeric(Age), na.rm = TRUE), 3),
+    n        = n()
+  )
+
+gender_summary <- demo |>
+  dplyr::filter(Status == "APPROVED") |>
+  dplyr::count(Sex) |>
+  dplyr::mutate(pct = round(n / sum(n) * 100, 3))
+```
+
+```{r}
+#| label: tbl-demographics
+#| tbl-cap: "Participant demographics"
+
+# build demographics table
+dplyr::bind_rows(
+  demo |>
+    dplyr::filter(Status == "APPROVED") |>
+    dplyr::summarise(
+      Characteristic = "Age",
+      Value = paste0(
+        round(mean(as.numeric(Age), na.rm = TRUE), 3),
+        " (SD = ",
+        round(sd(as.numeric(Age), na.rm = TRUE), 3),
+        ")"
+      )
+    ),
+  demo |>
+    dplyr::filter(Status == "APPROVED") |>
+    dplyr::count(Sex) |>
+    dplyr::mutate(
+      Characteristic = "Gender",
+      Value = paste0(Sex, ": n = ", n, " (", round(n / sum(n) * 100, 3), "%)")
+    ) |>
+    dplyr::select(Characteristic, Value)
+) |>
+  knitr::kable(
+    align     = c("l", "l"),
+    col.names = c("Characteristic", "")
+  )
+```
+
+The sample comprised `r age_summary$n` approved participants with a mean age of `r age_summary$mean_age` years (SD = `r age_summary$sd_age`). `r gender_summary |> dplyr::filter(Sex == "Male") |> pull(pct)`% identified as male and `r gender_summary |> dplyr::filter(Sex == "Female") |> pull(pct)`% as female.
+
+### Descriptive statistics
+
+```{r}
+#| label: tbl-ratings-descriptive
+#| tbl-cap: "Mean ratings (SD) by condition and outcome measure"
+
+rating_dat |>
+  dplyr::group_by(condition_label, question_type) |>
+  dplyr::summarise(
+    mean = round(mean(response, na.rm = TRUE), 3),
+    sd   = round(sd(response, na.rm = TRUE), 3),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(Value = paste0(mean, " (", sd, ")")) |>
+  dplyr::select(condition_label, question_type, Value) |>
+  tidyr::pivot_wider(names_from = question_type, values_from = Value) |>
+  dplyr::rename(Condition = condition_label) |>
+  kbl(
+    booktabs  = TRUE,
+    col.names = c("Condition", "Pleasantness", "Wanting", "Regret")
+  ) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position   = "left"
+  ) |>
+  add_header_above(c(" " = 1, "Mean (SD)" = 3))
+```
+
+### Pairwise comparisons
+
+```{r}
+#| label: ratings-pairwise-compute
+#| echo: false
+#| message: false
+
+condition_levels <- levels(factor(rating_dat$condition_label))
+
+y_start <- 95  # starting y-position for significance brackets
+y_step <- 5    # vertical step between multiple brackets
+
+
+# pairwise paired t-tests with holm correction, filtered to key comparisons
+pairwise_stats <- rating_dat |>
+  dplyr::group_by(question_type) |>
+  rstatix::pairwise_t_test(
+    response ~ condition_label,
+    paired           = TRUE,
+    p.adjust.method  = "holm"
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::mutate(
+    xmin = match(group1, condition_levels),
+    xmax = match(group2, condition_levels),
+    p.adj.signif = case_when(
+      p < .001 ~ "***",
+      p < .01  ~ "**",
+      p < .05  ~ "*",
+      TRUE     ~ "ns"
+    )
+  ) |>
+  dplyr::filter(
+    (xmin == 1 & xmax == 3) |
+    (xmin == 1 & xmax == 4) |
+    (xmin == 2 & xmax == 4)
+  ) |>
+  dplyr::group_by(question_type) |>
+  dplyr::mutate(y.position = y_start + (row_number() - 1) * y_step) |>
+  dplyr::ungroup()
+
+n_sig_comparisons <- sum(pairwise_stats$p.adj < .05)
+```
+
+```{r}
+#| label: fig-ratings-means
+#| fig-cap: "Mean ratings (±SE) by condition and outcome measure. Significance brackets reflect paired t-tests with Holm correction."
+
+# mean ratings bar plot with pairwise significance brackets
+plot_means <- rating_dat |>
+  dplyr::group_by(condition_label, question_type) |>
+  dplyr::summarise(
+    mean = mean(response, na.rm = TRUE),
+    se   = sd(response, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) |>
+  ggplot(aes(x = condition_label, y = mean, fill = condition_label)) +
+  geom_col(alpha = 0.7, colour = "grey30") +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.2) +
+  facet_wrap(~question_type, labeller = as_labeller(c(
+    "pleasantness" = "Pleasantness",
+    "wanting"      = "Wanting",
+    "regret"       = "Regret"
+  ))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_fill_viridis_d(option = "magma", begin = .3, end = .9, name = "Condition") +
+  labs(x = "Condition", y = "Rating") +
+  theme_custom() +
+  theme(
+    legend.position  = "right",
+    legend.background = element_blank(),
+    legend.key        = element_blank(),
+    axis.text.x       = element_blank(),
+    axis.ticks.x      = element_blank()
+  )
+
+# overlay significance brackets
+plot_means <- plot_means +
+  ggpubr::stat_pvalue_manual(
+    pairwise_stats,
+    label      = "p.adj.signif",
+    tip.length = 0.01,
+    hide.ns    = FALSE,
+    facet.by   = "question_type"
+  )
+
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "pilot", "pilot_manipulation.png"),
+  plot = plot_means, width = 8, height = 4, dpi = 800, bg = "white" )
+
+plot_means
+```
+
+```{r}
+#| label: tbl-ratings-pairwise
+#| tbl-cap: "Pairwise comparisons of ratings across conditions"
+
+pairwise_stats |>
+  dplyr::select(question_type, group1, group2, statistic, df, p, p.adj, p.adj.signif) |>
+  dplyr::mutate(
+    across(c(p, p.adj), ~ format.pval(., digits = 2, eps = .001)),
+    statistic = round(statistic, 2)
+  ) |>
+  dplyr::rename(
+    "Question type" = question_type,
+    "Group 1"       = group1,
+    "Group 2"       = group2,
+    "t"             = statistic,
+    "p"             = p,
+    "p (adjusted)"  = p.adj,
+    "Significance"  = p.adj.signif
+  ) |>
+  kbl(booktabs = TRUE) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  add_header_above(c(" " = 3, "Test statistic" = 2, "P-values" = 2, " " = 1)) |>
+  footnote(general = "Paired t-tests with Holm correction. *** p < .001, ** p < .01, * p < .05.")
+```
+
+Across the three outcome measures, `r n_sig_comparisons` of `r nrow(pairwise_stats)` pairwise comparisons reached significance after Holm correction.
+
+## Demand characteristics
+
+We examined whether the similar ratings of the single-modality devaluation conditions (No Sound & Colour, Sound & No Colour) were driven by demand characteristics or genuinely similar perceptual effects. High inter-rater consistency between these two conditions would suggest that participants were not discriminating between them, which would be consistent with a demand characteristics account.
+
+```{r}
+#| label: data-demand
+
+# reshape to wide format for icc computation
+demand_dat <- rating_dat |>
+  dplyr::filter(condition_label %in% c("No Sound & Colour", "Sound & No Colour")) |>
+  dplyr::select(participant_id, question_type, condition_label, response) |>
+  tidyr::pivot_wider(names_from = condition_label, values_from = response) |>
+  dplyr::rename(
+    no_sound  = `No Sound & Colour`,
+    no_colour = `Sound & No Colour`
+  )
+```
+
+```{r}
+#| label: demand-icc-compute
+
+outcomes <- c("pleasantness", "wanting", "regret")
+
+# compute icc2 (two-way random, absolute agreement) per outcome
+icc_results <- map_dfr(outcomes, function(outcome) {
+  dat <- demand_dat |>
+    dplyr::filter(question_type == outcome) |>
+    dplyr::select(no_sound, no_colour)
+
+  icc_out <- psych::ICC(dat)
+
+  icc2 <- icc_out$results |>
+    dplyr::filter(type == "ICC2") |>
+    dplyr::select(ICC, `F`, df1, df2, p, `lower bound`, `upper bound`)
+
+  tibble(
+    outcome        = outcome,
+    ICC            = round(icc2$ICC, 3),
+    CI_lower       = round(icc2$`lower bound`, 3),
+    CI_upper       = round(icc2$`upper bound`, 3),
+    F_stat         = round(icc2$`F`, 3),
+    df1            = icc2$df1,
+    df2            = icc2$df2,
+    p              = round(icc2$p, 3),
+    interpretation = case_when(
+      ICC >= 0.90 ~ "excellent agreement",
+      ICC >= 0.75 ~ "good agreement",
+      ICC >= 0.50 ~ "moderate agreement",
+      TRUE        ~ "poor agreement — participants discriminating"
+    )
+  )
+})
+```
+
+```{r}
+#| label: tbl-demand-icc
+#| tbl-cap: "Intraclass correlation coefficients between single-modality devaluation conditions"
+
+icc_results |>
+  dplyr::mutate(
+    CI = paste0("[", CI_lower, ", ", CI_upper, "]"),
+    p  = format.pval(p, digits = 2, eps = .001)
+  ) |>
+  dplyr::select(outcome, ICC, CI, F_stat, df1, df2, p, interpretation) |>
+  dplyr::rename(
+    "Outcome"        = outcome,
+    "ICC2"           = ICC,
+    "95% CI"         = CI,
+    "F"              = F_stat,
+    "df1"            = df1,
+    "df2"            = df2,
+    "p"              = p,
+    "Interpretation" = interpretation
+  ) |>
+  kbl(booktabs = TRUE) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  add_header_above(c(" " = 1, "ICC2" = 2, "F-test" = 3, " " = 2)) |>
+  footnote(general = "Two-way random effects model, absolute agreement, single measures (ICC2). Conditions compared: No Sound & Colour vs Sound & No Colour.")
+```
+
+ICC2 values ranged from `r min(icc_results$ICC)` to `r max(icc_results$ICC)` across outcomes, suggesting `r icc_results |> slice_max(ICC) |> pull(interpretation)` for `r icc_results |> slice_max(ICC) |> pull(outcome)`.
+
+```{r}
+#| label: fig-demand-scatter
+#| fig-cap: "Agreement between No Sound & Colour and Sound & No Colour ratings. The dashed line indicates perfect agreement (slope = 1). ICC values are displayed per outcome."
+
+# icc annotation data for plot overlay
+icc_labels <- icc_results |>
+  dplyr::mutate(
+    label         = paste0("ICC = ", ICC),
+    question_type = factor(outcome, levels = c("pleasantness", "wanting", "regret"))
+  )
+
+plot_demand <- demand_dat |>
+  dplyr::mutate(question_type = factor(question_type, levels = c("pleasantness", "wanting", "regret"))) |>
+  ggplot(aes(x = no_sound, y = no_colour)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed",
+              colour = "grey50", linewidth = 0.5) +
+  geom_point(aes(colour = question_type), shape = 19, size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, colour = "grey20",
+              linewidth = 0.7, alpha = 0.15) +
+  geom_text(
+    data        = icc_labels,
+    aes(x = 5, y = 90, label = label),
+    inherit.aes = FALSE,
+    hjust       = 0,
+    size        = 3,
+    colour      = "grey30"
+  ) +
+  facet_wrap(~question_type, labeller = as_labeller(c(
+    "pleasantness" = "Pleasantness",
+    "wanting"      = "Wanting",
+    "regret"       = "Regret"
+  ))) +
+  scale_x_continuous(limits = c(0, 100)) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_colour_viridis_d(option = "B", begin = .2, end = .8) +
+  coord_fixed() +
+  labs(x = "No sound", y = "No colour") +
+  theme_custom() +
+  theme(
+    legend.position = "none",
+    panel.spacing   = unit(1.5, "lines"),
+    axis.title.x    = element_text(margin = margin(t = 10))
+  )
+
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "pilot", "demand_plot.png"),
+  plot = plot_demand, bg = "white", dpi = 800, device = "png", width = 10, height = 5
+)
+
+plot_demand
+```

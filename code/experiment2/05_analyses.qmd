@@ -1,0 +1,2428 @@
+---
+title: "Analyses"
+description: "This document entails the model-based analyses ('4_modeling.R), visualises the data, tests assumptions, and examines the confirmatory and exploratory results."
+author:
+  - name: Lukas Gunschera
+    orcid: 0000-0002-8241-0833
+    email: l.gunschera@outlook.com
+    corresponding: true
+    affiliation:
+      - ref: 1
+affiliations:
+  - id: 1
+    name: University of Cambridge
+    department: Medical Research Council Cognition and Brain Sciences Unit
+format:
+  html:
+    code-fold: true
+    toc: true
+editor: visual
+---
+
+```{r}
+#| label: setup-document
+#| include: false
+#| message: false
+#| cache: false
+
+# set parameters and seed
+source(here::here("code", "00_setup.R"))
+set.seed(777)
+
+# configure global output options for the document
+is_html <- knitr::is_html_output()
+knitr::opts_chunk$set(
+  eval = TRUE,
+  cache = FALSE,  # disable global caching by default
+  warning = FALSE,
+  error = FALSE,
+  message = FALSE,
+  echo = is_html,
+  fig.width = 7,
+  fig.height = 5,
+  dpi = 800,
+  dev = "ragg_png"  # use ragg_png for better rendering performance
+)
+
+# load dependencies
+pacman::p_load(gt, zoo, plm, glue, brms, ragg, here, nlme, knitr, purrr, dplyr, tidyr, knitr, Hmisc, effsize, viridis, stringr, rstatix, janitor, ggplot2, ggExtra, devtools, gtExtras, magrittr, hBayesDM, corrplot, extrafont, patchwork, ggpattern, bayesplot, tidybayes, lubridate, posterior, tidyverse, BayesFactor, systemfonts, cowplot)
+
+# load custom helper and plotting functions
+source(here::here("code", "experiment2", "functions", "fun_plots.R"))
+source(here::here("code", "experiment2", "functions", "fun_helper.R"))
+```
+
+```{r}
+cat("Document rendered at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+```
+
+## Data
+
+Load processed participant data as returned from the script 'code/4_modeling' and based on dependencies '1_parsing.R', '2_descriptive.R', and '4_modeling.R'. Scripts are split to reduce computational demands.
+
+You can run the below chunk to fit the models (set run_models to TRUE) - but we suggest running this file independently.
+
+```{r}
+#| label: fit-models-file
+#| message: false
+#| warning: false
+#| cache: false
+
+#run_models <- FALSE  # set to TRUE to run the models (note: this will take a long time)
+#source(here::here("code", "experiment2", "03_modelling.R"))
+```
+
+```{r}
+#| label: data-import
+
+# load individual-level model parameters from the winning model (m3)
+data_params <- readRDS(here::here("data", "experiment2", "modelling", "parameters", "m3_para_data.RDS"))
+
+# load the full cleaned dataset including trial-level choice data
+data <- readRDS(here::here("data", "experiment2", "processed", "data_clean.RDS"))
+```
+
+## Descriptive Statistics
+
+First, we have a closer look at the demographic data of participants to characterise the sample.
+
+```{r}
+#| label: descriptive-stats-table
+#| echo: true
+#| warning: false
+#| message: false
+#| output: asis
+
+data_params |>
+  dplyr::select(age, gender, ethnicity, income_value, income_currency, 
+                neuro_screening, mh_screening) |>
+  dplyr::mutate(income_gbp = case_when(
+    income_currency == "usd" ~ income_value * 0.73243115, # convert usd income to gbp using approximate exchange rate
+    TRUE ~ income_value
+  )) |>
+  dplyr::summarise(
+    n = n(),
+    mean_age = mean(age),
+    sd_age = sd(age),
+    min_age = min(age),
+    max_age = max(age),
+    median_income = median(income_gbp),
+    sd_income = sd(income_gbp),
+    mean_income = mean(income_gbp)
+  ) |>
+  dplyr::mutate(across(where(is.numeric), ~sprintf("%.3f", .))) |>
+  knitr::kable(
+    caption = "Descriptive Statistics",
+    col.names = c("N", "Mean Age", "SD Age", "Min Age", "Max Age", 
+                  "Median Income (GBP)", "SD Income", "Mean Income (GBP)")
+  )
+```
+
+Following an overview of the quantitative descriptives above, let's have a closer look at the qualitative demographics including ethnicity and mental health conditions.
+
+```{r}
+#| label: categorical-stats-labeled
+#| echo: true
+#| warning: false
+#| message: false
+
+# pivot categorical variables to long format to compute frequencies and percentages per category
+data_params |>
+  dplyr::select(gender, ethnicity, neuro_screening, mh_screening) |>
+  dplyr::mutate(across(everything(), as.character)) |>
+  tidyr::pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "category"
+  ) |>
+  dplyr::group_by(variable, category) |>
+  dplyr::summarise(
+    n = n(),
+    .groups = "drop"
+  ) |>
+  dplyr::group_by(variable) |>
+  dplyr::mutate(
+    percent = sprintf("%.3f%%", (n / sum(n)) * 100)
+  ) |>
+  dplyr::arrange(variable, desc(n)) |>
+  knitr::kable(
+    caption = "Categorical Variable Frequencies",
+    col.names = c("Variable", "Category", "N", "Percentage")
+  )
+```
+
+Here's an overview of the mental health conditions in the sample.
+
+```{r}
+#| label: mental-health-prevalence-html
+#| echo: true
+#| warning: false
+#| message: false
+#| output: asis
+
+# count participants with each diagnosis using dedicated columns and free-text screening fields
+mh_overview <- data_params |>
+  dplyr::summarise(
+    `Depression` = sum(mh_mdd | grepl("depression", mh_other, ignore.case = TRUE), na.rm = TRUE),
+    `Bipolar Disorder` = sum(mh_bpd, na.rm = TRUE),
+    `Anxiety disorder` = sum(mh_gad | grepl("anxiety", mh_other, ignore.case = TRUE), na.rm = TRUE),
+    `Obsessive-Compulsive Disorder` = sum(mh_ocd, na.rm = TRUE),
+    `Autism Spectrum Disorder` = sum(mh_autism, na.rm = TRUE),
+    `Attention-Deficit Hyperactivity Disorder` = sum(grepl("adhd|add", mh_other, ignore.case = TRUE), na.rm = TRUE),
+    `Borderline Personality Disorder` = sum(grepl("\\bBPD\\b", mh_other), na.rm = TRUE),
+    `Post-Traumatic Stress Disorder` = sum(grepl("ptsd", mh_other, ignore.case = TRUE), na.rm = TRUE)
+  ) |>
+  tidyr::pivot_longer(everything(), names_to = "Diagnosis", values_to = "n") |>
+  # express each count as a percentage of the full sample and of the mh-screened subsample
+  dplyr::mutate(
+    `% of sample` = sprintf("%.3f%%", (n / nrow(data_params)) * 100),
+    `% of mental health` = sprintf("%.3f%%", (n / sum(data_params$mh_screening, na.rm = TRUE)) * 100)
+  )
+
+# display formatted table
+knitr::kable(mh_overview, 
+             caption = "Mental Health Diagnoses Overview",
+             align = c("l", "r", "r", "r"))
+```
+
+Participants complete the effort-based decision-making task in both condition (devaluation, baseline). The below table illustrates the time from start of the task until end. This time excludes the instructions and calibration.
+
+```{r}
+#| label: task-duration
+#| echo: true
+#| warning: false
+#| message: false
+#| output: asis
+
+# compute per-session duration for each participant, excluding the calibration phase
+duration_results <- data$game_meta |>
+  dplyr::filter(task_condition != "calibration") |>
+  dplyr::group_by(subj_id, task_condition) |>
+  dplyr::summarise(
+    session_duration = sum(as.numeric(end_time - start_time)), 
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(subj_id, task_condition) |>
+  dplyr::group_by(subj_id) |>
+  dplyr::filter(n() >= 2) |>
+  dplyr::mutate(session_order = row_number()) |>
+  dplyr::ungroup() |>
+  # summarise duration statistics overall and separately by session order (baseline = 1, devalued = 2)
+  dplyr::summarise(
+    mean_duration = mean(session_duration),
+    sd_duration = sd(session_duration),
+    min_duration = min(session_duration),
+    max_duration = max(session_duration),
+    mean_duration_baseline = mean(session_duration[session_order == 1]),
+    mean_duration_devalued = mean(session_duration[session_order == 2]),
+    sd_duration_baseline = sd(session_duration[session_order == 1]),
+    sd_duration_devalued = sd(session_duration[session_order == 2])
+  ) |>
+  dplyr::mutate(across(where(is.numeric), ~sprintf("%.3f", .)))
+
+duration_results |>
+  knitr::kable(
+    caption = "Session Duration Statistics (seconds)",
+    col.names = c(
+      "Mean", "SD", "Min", "Max",
+      "Mean Baseline", "Mean Devalued", "SD Baseline", "SD Devalued"
+    )
+  )
+```
+
+```{r}
+#| label: task-accepted-sucess-rate
+
+# rate of accepted challenges
+data$game |> 
+  dplyr::filter(phase == "game") |> 
+  # accepted trials
+  dplyr::filter(choice == 1) |> 
+  group_by(subj_id) |> 
+  reframe(prop_accept = n() / 64) |> 
+  reframe(mean_prop_accept = mean(prop_accept)*100, 
+          sd_prop_accept = sd(prop_accept)*100, 
+          min_prop_accept = min(prop_accept), 
+          max_prop_accept = max(prop_accept))
+
+# successrate of accepted challenges
+p_succ <- data$game |> 
+  dplyr::filter(phase == "game") |> 
+  # accepted trials
+  dplyr::filter(choice == 1) |> 
+  dplyr::group_by(subj_id) |> 
+  reframe(prop_success = sum((goalClicks - clicks) <= 0) / n()) |> 
+  reframe(mean_prop_sucess = mean(prop_success)*100, 
+          sd_prop_sucess = sd(prop_success)*100)
+```
+
+The modeling procedure utilises all trials without regard for the fact whether participants accept trials that they end up failing. A look at the data reveals that participants fail close to no offers that they accept: `r sprintf("%.3f", p_succ[1])`
+
+Examine trial behaviour on a condition basis.
+
+```{r}
+#| label: acceptance-bayestest
+
+# calculate acceptance proportions per participant
+acceptance_props <- data$game |> 
+  dplyr::filter(phase == "game") |> 
+  dplyr::filter(task_condition %in% c("baseline", "devalued")) |>
+  dplyr::filter(choice == 1) |> 
+  dplyr::group_by(subj_id, task_condition) |> 
+  dplyr::summarise(
+    prop_accept = n() / 32,  # 32 trials per condition
+    .groups = "drop"
+  ) |>
+  tidyr::pivot_wider(
+    names_from = task_condition,
+    values_from = prop_accept,
+    values_fill = 0 # put zero for participants accepting no trials (all participants accepted some across entire study)
+  )
+
+# calculate means for reporting
+baseline_mean <- mean(acceptance_props$baseline, na.rm = TRUE) * 100
+devalued_mean <- mean(acceptance_props$devalued, na.rm = TRUE) * 100
+
+# Bayesian paired t-test
+bf_result <- ttestBF(
+  x = acceptance_props$baseline,
+  y = acceptance_props$devalued,
+  paired = TRUE,
+  rscale = "medium"  # Cauchy prior width (medium = sqrt(2)/2 ≈ 0.707)
+)
+
+# extract results
+bf_value <- extractBF(bf_result)[1, "bf"]
+bf_value
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(bf_result, iterations = 10000)
+
+# get median effect size
+median_effect <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+```
+
+The ***BF10*** **of `r round(bf_value, 3)`** indicates strong support for the null hypothesis that acceptance rates did not differ between the baseline and devalued conditions within subjects. The median standardised effect size was `r sprintf("%.3f", median_effect)`, and the *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: acceptance-bayestest-groups
+
+# calculate overall acceptance proportions for each subject (collapsing across conditions)
+acceptance_overall <- data$game |> 
+  dplyr::filter(phase == "game") |> 
+  dplyr::filter(task_condition %in% c("baseline", "devalued")) |>
+  dplyr::group_by(subj_id, group) |> 
+  dplyr::summarise(
+    prop_accept = sum(choice == 1, na.rm = TRUE) / 64,  # 64 total trials (32+32)
+    .groups = "drop"
+  )
+
+# extract data for each group
+addiction_props <- acceptance_overall |> 
+  dplyr::filter(group == "addiction") |> 
+  dplyr::pull(prop_accept)
+
+control_props <- acceptance_overall |> 
+  dplyr::filter(group == "control") |> 
+  dplyr::pull(prop_accept)
+
+# means for reporting
+addiction_mean <- mean(addiction_props) * 100
+control_mean <- mean(control_props) * 100
+
+
+bf_result <- ttestBF(
+  x = addiction_props,
+  y = control_props,
+  paired = FALSE,
+  rscale = "medium"
+)
+
+# Extract results
+bf_value <- extractBF(bf_result)[1, "bf"]
+bf_value
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(bf_result, iterations = 10000)
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+```
+
+Participants behaviour on the task is presented below.
+
+```{r}
+#| label: plot-task-descriptives
+
+# accepted challenges plot
+acceptance_plot <- task_plot(data$game, 
+                             main_title = "", 
+                             plot_type = "line_plot",
+                             arrange_cols = 0, arrange_rows = 0) +
+  labs(x = "Effort level", y = "Acceptance probability (SE)") +
+  theme_custom()
+
+acceptance_plot
+
+# save rds
+saveRDS(acceptance_plot, here::here("output", "rds", "gg_taskbehaviour_exp2.rds"))
+
+# save ggplot
+ggsave(
+  acceptance_plot,
+  filename = here::here("output", "figures", "experiment2", "task_behaviour.png"),
+  width = 7,
+  height = 5,
+  dpi = 800,
+  background = "white"
+)
+```
+
+# Matching
+
+We matched the addiction and no-addiction groups on age and gender. To confirm this, we perform the relevant statistical tests below.
+
+```{r}
+
+# bayesian independent-samples t-test for age
+tbf_age <- BayesFactor::ttestBF(
+  formula = age ~ group,   
+  data = data_params,
+  rscale = 1/3       
+)
+
+print(tbf_age)
+
+# build a 2x2 contingency table of group by gender for the chi-square analogue
+gender_table <- table(data_params$group, data_params$gender)
+
+# totals (row margins) are fixed by design, which matches the matched-sample setup
+tbf_gender <- BayesFactor::contingencyTableBF(
+  gender_table,
+  sampleType = "indepMulti",
+  fixedMargin = "rows"        
+)
+
+print(tbf_gender)
+```
+
+The results indicate that the matching procedure was successful, and the groups do not differ on age or gender.
+
+# Task Validation
+
+First, let's validate the effort-expenditure task. To this end, we reproduce the expected effort discounting effects using a mixed-effects analysis of variance on the mean proportion of trials accepted per participant, as a function of effort and reward levels.
+
+```{r}
+#| label: task-validation-anova
+#| echo: false
+#| warning: false
+#| message: false
+#| output: asis
+
+# aggregate to mean acceptance rate per participant, effort level, and reward level
+choice_data <- data$modelling_data |> 
+  dplyr::group_by(subjID, effort_a, amount_a) |> 
+  dplyr::summarize(mean_choice = mean(choice))
+
+# fit a linear mixed-effects model with random intercepts per subject and a full factorial design 
+anov_ebdm <- anova(nlme::lme(mean_choice ~ effort_a * amount_a, random= ~1|subjID, data = choice_data))
+```
+
+The ANOVA revealed significant main effects of effort (*F*(1, `r anov_ebdm$denDF[2]`) = `r round(anov_ebdm[2, "F-value"], 3)`, *p* \< .0001) and reward (*F*(1, `r anov_ebdm$denDF[3]`) = `r round(anov_ebdm[3, "F-value"], 3)`, *p* \< .0001), as well as a significant interaction (*F*(1, `r anov_ebdm$denDF[4]`) = `r round(anov_ebdm[4, "F-value"], 3)`, *p* \< .0001).
+
+Below we perform post-hoc ANOVAs for the individual effort and reward levels.
+
+```{r}
+#| label: task-validation-posthoc
+#| echo: false
+#| warning: false
+
+# extract sorted unique levels of effort and reward for indexing in the post-hoc tests
+effort_levels <- choice_data$effort_a |> unique() |> sort()
+amount_levels <- choice_data$amount_a |> unique() |> sort()
+
+# post-hoc anova: effect of effort at each reward level separately
+anov_effort_1 <- anova(lme(mean_choice ~ effort_a, random= ~1|subjID, data = choice_data |> 
+            dplyr::filter(amount_a == amount_levels[1])))
+anov_effort_2 <- anova(lme(mean_choice ~ effort_a, random= ~1|subjID, data = choice_data |> 
+            dplyr::filter(amount_a == amount_levels[2])))
+anov_effort_3 <- anova(lme(mean_choice ~ effort_a, random= ~1|subjID, data = choice_data |> 
+            dplyr::filter(amount_a == amount_levels[3])))
+anov_effort_4 <- anova(lme(mean_choice ~ effort_a, random= ~1|subjID, data = choice_data |> 
+            dplyr::filter(amount_a == amount_levels[4])))
+
+# post-hoc anova: effect of reward at each effort level separately
+anov_reward_1 <- anova(lme(mean_choice ~ amount_a, random = ~1|subjID, data = choice_data |> 
+            dplyr::filter(effort_a == effort_levels[1])))
+anov_reward_2 <- anova(lme(mean_choice ~ amount_a, random = ~1|subjID, data = choice_data |> 
+            dplyr::filter(effort_a == effort_levels[2])))
+anov_reward_3 <- anova(lme(mean_choice ~ amount_a, random = ~1|subjID, data = choice_data |> 
+            dplyr::filter(effort_a == effort_levels[3])))
+anov_reward_4 <- anova(lme(mean_choice ~ amount_a, random = ~1|subjID, data = choice_data |> 
+            dplyr::filter(effort_a == effort_levels[4])))
+```
+
+Post-hoc analyses confirmed that effort significantly reduced acceptance rates at each reward level (all *p*s \< .0001): reward level 1 (*F*(1, `r anov_effort_1$denDF[2]`) = `r round(anov_effort_1[2, "F-value"], 3)`), reward level 2 (*F*(1, `r anov_effort_2$denDF[2]`) = `r round(anov_effort_2[2, "F-value"], 3)`), reward level 3 (*F*(1, `r anov_effort_3$denDF[2]`) = `r round(anov_effort_3[2, "F-value"], 3)`), and reward level 4 (*F*(1, `r anov_effort_4$denDF[2]`) = `r round(anov_effort_4[2, "F-value"], 3)`). Similarly, reward amount significantly increased acceptance rates at each effort level (all *p*s \< .0001): effort level 1 (*F*(1, `r anov_reward_1$denDF[2]`) = `r round(anov_reward_1[2, "F-value"], 3)`), effort level 2 (*F*(1, `r anov_reward_2$denDF[2]`) = `r round(anov_reward_2[2, "F-value"], 3)`), effort level 3 (*F*(1, `r anov_reward_3$denDF[2]`) = `r round(anov_reward_3[2, "F-value"], 3)`), and effort level 4 (*F*(1, `r anov_reward_4$denDF[2]`) = `r round(anov_reward_4[2, "F-value"], 3)`).
+
+```{r}
+#| label: fig-acceptance-line
+#| fig-cap: "Acceptance proportion across effort levels for different reward levels (line plot)"
+#| fig-width: 6
+#| fig-height: 4
+
+# line plot showing the continuous effort discounting effect across reward levels
+acceptance_line <- task_plot(
+  data$modelling_data, 
+  main_title = "", 
+  plot_type = "line_plot",
+  arrange_cols = 0, 
+  arrange_rows = 0
+) + theme_custom() +
+  labs(x = "Effort level", y = "Acceptance probability (SE)") 
+
+print(acceptance_line)
+```
+
+```{r}
+#| label: fig-acceptance-bar
+#| fig-cap: "Acceptance proportion by effort level for each reward level (bar plots)"
+#| fig-width: 8
+#| fig-height: 6
+
+# bar plots arranged in a 2x2 grid, one panel per reward level
+acceptance_bar <- task_plot(
+  data$modelling_data, 
+  main_title = "", 
+  plot_type = "bar_plot",
+  arrange_cols = 2, 
+  arrange_rows = 2
+)
+
+print(acceptance_bar)
+
+saveRDS(acceptance_bar, here::here("output", "rds", "gg_taskbehaviour_exp2_bar.rds"))
+
+ggsave(
+  acceptance_bar,
+  filename = here::here("output", "figures", "experiment2", "task_behaviour_bar.png"),
+  width = 8,
+  height = 6,
+  dpi = 800,
+  background = "white"
+)
+```
+
+@fig-acceptance-line illustrates that participants were less likely to accept offers with increasing effort. The bar plots in @fig-acceptance-bar further show that acceptance rates were the highest for higher reward levels, and how acceptance decreased within each reward level as a function of increasing effort.
+
+# Manipulation Check
+
+Critical for the present experiment was the devaluation manipulation. We observed large effect sizes on self-reported liking in a pilot study for the combination of no colour and no sound in particular. In the below, we examine whether this manipulation was also effective in the test dataset examining self-reported levels of liking between the two conditions (baseline/devalued).
+
+```{r}
+#| label: manipulation-check
+
+# compute descriptive statistics for self-reported liking in each condition
+mean(data_params$liking_b)
+sd(data_params$liking_b)
+mean(data_params$liking_d)
+sd(data_params$liking_d)
+
+# bayesian paired t-test comparing liking between baseline and devaluation conditions
+tbf_att <- BayesFactor::ttestBF(
+  x = data_params$liking_b,
+  y = data_params$liking_d,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+# extract the bayes factor (bf10: evidence for h1 over h0)
+bf10_att <- extractBF(tbf_att)$bf
+
+# draw mcmc posterior samples to characterise the posterior distribution
+posterior_samples_att <- posterior(tbf_att, iterations = 10000)
+
+# extract the standardised effect size (delta) from posterior samples
+delta_samples_att <- posterior_samples_att[, "delta"]
+
+# compute the 95% credible interval for delta
+credible_interval_att <- quantile(posterior_samples_att[, "delta"], probs = c(0.025, 0.975))
+
+# summarise the posterior distribution of the effect size
+delta_mean <- mean(delta_samples_att)
+delta_median <- median(delta_samples_att)
+delta_sd <- sd(delta_samples_att)
+delta_ci <- quantile(delta_samples_att, probs = c(0.025, 0.975))
+```
+
+The ***BF10*** **of `r round(bf10_att, 3)`** indicates extreme support for the alternative hypothesis that *liking* is different between the baseline and the devaluation conndition within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval_att[1])` to `r sprintf("%.3f", credible_interval_att[2])`.
+
+*Delta (δ)* for difference in self-reported liking between the baseline and devalued condition is **`r sprintf("%.3f", delta_mean)`** with a 95% Credible Interval ranging from `r sprintf("%.3f", delta_ci[1])` to `r sprintf("%.3f", delta_ci[2])`.
+
+```{r}
+#| label: fig-manipulation-check
+#| fig-cap: "Liking difference between baseline and devaluation condition."
+#| fig-width: 8
+#| fig-height: 6
+
+# pre-compute condition medians for the median indicator points on the plot
+medians <- data_params |>
+  tidyr::pivot_longer(cols = c(liking_b, liking_d),
+               names_to = "condition",
+               values_to = "liking") |>
+  group_by(condition) |>
+  dplyr::summarise(median_val = median(liking, na.rm = TRUE))
+
+# density plot overlaid with credible interval bands and median points
+ggplot_liking_dens <- data_params |>
+  tidyr::pivot_longer(cols = c(liking_b, liking_d),
+               names_to = "condition",
+               values_to = "liking") |>
+  ggplot2::ggplot(aes(x = liking, fill = condition, group = condition)) +
+  ggplot2::geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  # add interval bands below the density curve (66%, 95% credible intervals)
+  ggdist::stat_interval(
+    aes(y = -0.02, colour = condition),
+    position = position_dodge(width = 0.035),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.3,
+    show.legend = FALSE
+  ) +
+  # overlay median points using pre-calculated values to avoid position jitter
+  geom_point(
+    data = medians,
+    aes(x = median_val, y = -0.02, fill = condition, colour = condition),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.035, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("liking_b" = "Baseline", "liking_d" = "Devalued")) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("liking_b" = "Baseline", "liking_d" = "Devalued")) +
+  labs(x = "Self-reported liking", y = "Density", fill = "Condition") +
+  scale_x_continuous(limits = c(0, 7), breaks = seq(0,7,1)) +
+  scale_y_continuous(limits = c(-0.03, NA), breaks = seq(0, 0.5, 0.1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.1, 0.9),
+        legend.background = element_blank(),
+        legend.key = element_blank()) 
+
+# return plot
+print(ggplot_liking_dens)
+
+saveRDS(ggplot_liking_dens, here::here("output", "rds", "gg_liking_exp2.rds"))
+
+# save high-resolution figure to the output directory
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "experiment2", "fig-liking-manipulation.png"),
+  plot = ggplot_liking_dens,
+  width = 8,
+  height = 6,
+  dpi = 600
+)
+```
+
+@fig-manipulation-check illustrates the distribution of self-reported liking in the baseline and devaluation conditions. The devaluation manipulation was successful, with participants reporting substantially lower liking in the devaluation condition compared to the baseline condition.
+
+# Main Analyses
+
+## Hypothesis 1
+
+*Hypothesis 1:* *Wanting* (acceptance bias parameter) is higher for Baseline than for Devaluation condition.
+
+Below, I perform a Bayesian paired samples t-test on the choice bias parameter (a), testing for differences between the baseline and devaluation condition within all subjects.
+
+```{r}
+#| label: hypothesis1-test
+#| tbl-cap: "Bayesian paired t-test for wanting (a parameter) between baseline and devaluation conditions"
+#| cache: false
+
+# bayesian paired t-test: within-subject comparison of the acceptance bias (α) between baseline and devaluation conditions
+tbf_h1 <- BayesFactor::ttestBF(
+  x = data_params$a_baseline,
+  y = data_params$a_devalued,
+  paired = TRUE,
+  rscale = 1/3
+)
+
+# extract the bayes factor (bf10)
+bf10_h1 <- extractBF(tbf_h1)$bf
+
+# draw mcmc samples from the posterior to characterise uncertainty
+posterior_samples_h1 <- BayesFactor::posterior(tbf_h1, iterations = 10000)
+
+# isolate the standardised effect size (delta) column from the posterior matrix
+delta_samples_h1 <- posterior_samples_h1[, "delta"]
+
+# 95% credible interval on the effect size
+credible_interval_h1 <- stats::quantile(posterior_samples_h1[, "delta"], probs = c(0.025, 0.975))
+
+# compute summary statistics for inline reporting
+delta_mean <- mean(delta_samples_h1)
+delta_median <- median(delta_samples_h1)
+delta_sd <- sd(delta_samples_h1)
+delta_ci <- quantile(delta_samples_h1, probs = c(0.025, 0.975))
+```
+
+The ***BF10*** **of `r sprintf("%.3f", bf10_h1)`** indicates moderate support for the null hypothesis that *wanting* is the same for the baseline and devalued conditions within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval_h1[1])` to `r sprintf("%.3f", credible_interval_h1[2])`.
+
+*Delta (δ)* for the within-subject difference in wanting (acceptance bias parameter) between the baseline and devalued condition is **`r sprintf("%.3f", delta_mean)`** with a 95% Credible Interval ranging from `r sprintf("%.3f", delta_ci[1])` to `r sprintf("%.3f", delta_ci[2])`.
+
+@fig-h1-prior-posterior below illustrates the prior and posterior density for Hypothesis 1.
+
+```{r}
+#| label: fig-h1-prior-posterior
+#| fig-cap: "Prior and posterior density for Hypothesis 1."
+#| fig-width: 8
+#| fig-height: 6
+
+# generate the theoretical prior density (cauchy with rscale = 1/3) across a range of delta values
+delta_range <- seq(-3, 3, length.out = 1000)
+prior_density <- dcauchy(delta_range, location = 0, scale = 1/3)
+
+plot_data <- data.frame(
+  delta = delta_range,
+  prior = prior_density
+)
+
+# overlay empirical posterior density (from mcmc samples) against the theoretical prior
+ggplot_h1 <- ggplot() +
+  # posterior distribution estimated from mcmc samples
+  geom_density(data = data.frame(delta = delta_samples_h1),
+               aes(x = delta_samples_h1, fill = "Posterior"), 
+               alpha = 0.7,
+               colour = NA) +
+  # prior distribution as a line
+  geom_line(data = plot_data,
+            aes(x = delta, y = prior, color = "Prior"),
+            linewidth = 1, linetype = "twodash") +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL) +
+  scale_colour_viridis_d(option = "magma", begin = 0.9, end = 0.8, name = NULL, direction = -1) +
+  labs(x = "Effect size (δ)", 
+       y = "Density",
+       title = "") +
+  scale_x_continuous(limits = c(-1,1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.9, 0.8),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+
+print(ggplot_h1)
+
+# save high-resolution figure
+ggsave(
+  filename = here::here("output", "figures", "experiment2", "analyses", "fig-h1-prior-posterior.png"),
+  plot = ggplot_h1,
+  width = 8,
+  height = 6,
+  dpi = 600
+)
+```
+
+@fig-h1-distribution below illustrates the distribution of the acceptance bias parameter estimated for the addiction and control groups.
+
+```{r}
+#| label: fig-h1-distribution
+#| fig-cap: "Prior and posterior density for Hypothesis 1."
+#| fig-width: 8
+#| fig-height: 6
+
+# pre-compute medians per condition for the median indicator points
+medians <- data_params |>
+  pivot_longer(cols = c(a_devalued, a_baseline),
+               names_to = "condition",
+               values_to = "acceptance_bias") |>
+  group_by(condition) |>
+  dplyr::summarise(median_val = median(acceptance_bias, na.rm = TRUE))
+
+# density plot of the acceptance bias parameter, split by condition
+ggplot_h1_dens <- data_params |>
+  pivot_longer(cols = c(a_devalued, a_baseline),
+               names_to = "condition",
+               values_to = "acceptance_bias") |>
+  ggplot2::ggplot(aes(x = acceptance_bias, fill = condition, colour = condition)) +
+  ggplot2::geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  # credible interval bands positioned below the density curves
+  ggdist::stat_interval(
+    aes(y = -0.015),
+    position = position_dodge(width = 0.02),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.4,
+    show.legend = FALSE
+  ) +
+  # median indicator points using pre-calculated values
+  geom_point(
+    data = medians,
+    aes(x = median_val, y = -0.015, fill = condition, colour = condition),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.02, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  labs(x = "Wanting (α)", y = "Density", fill = "Condition") +
+  scale_x_continuous(limits = c(-6, 6)) +
+  theme_custom() +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("a_baseline" = "Baseline", "a_devalued" = "Devalued")) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("a_baseline" = "Baseline", "a_devalued" = "Devalued")) +
+  scale_y_continuous(limits = c(-0.02, NA)) +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.15, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) 
+
+print(ggplot_h1_dens)
+
+saveRDS(ggplot_h1_dens, here::here("output", "rds", "gg_wanting_exp2.rds"))
+
+# save high-resolution figure
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "experiment2", "fig-h1-acceptance-bias-distribution.png"),
+  plot = ggplot_h1_dens,
+  width = 8,
+  height = 6,
+  dpi = 800
+)
+```
+
+The distributions show the densities of wanting parameter estimates for the baseline (`r medians$median_val[1] |> round(3)`) and devalued condition (`r medians$median_val[2] |> round(3)`).
+
+### Explore Hypothesis 1
+
+We also explored whether wanting for TikTok rewards differed between the addiction and control group at baseline.
+
+```{r}
+#| label: hypothesis1-explore
+#| tbl-cap: "Bayesian independent t-test for wanting (a parameter) between addiction and control groups"
+#| cache: false
+
+# bayesian independent t-test
+tbf_h1_exp <- BayesFactor::ttestBF(
+  x = data_params$a_baseline[data_params$group == "control"],
+  y = data_params$a_baseline[data_params$group == "addiction"],
+  paired = FALSE,
+  rscale = 1/3
+)
+
+# extract the bayes factor (bf10)
+bf10_h1_exp <- extractBF(tbf_h1_exp)$bf
+
+# draw mcmc samples from the posterior to characterise uncertainty
+posterior_samples_h1_exp <- BayesFactor::posterior(tbf_h1_exp, iterations = 10000)
+
+# isolate the standardised effect size (delta) column from the posterior matrix
+delta_samples_h1_exp <- posterior_samples_h1_exp[, "delta"]
+
+# 95% credible interval on the effect size
+credible_interval_h1_exp <- stats::quantile(posterior_samples_h1_exp[, "delta"], probs = c(0.025, 0.975))
+
+# compute summary statistics for inline reporting
+delta_mean_exp <- mean(delta_samples_h1_exp)
+delta_median_exp <- median(delta_samples_h1_exp)
+delta_sd_exp <- sd(delta_samples_h1_exp)
+delta_ci_exp <- quantile(delta_samples_h1_exp, probs = c(0.025, 0.975))
+```
+
+The ***BF10*** **of `r sprintf("%.3f", bf10_h1_exp)`** indicates moderate support for the null hypothesis that *wanting* is the same or lower for the addiction compared to the control group. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval_h1_exp[1])` to `r sprintf("%.3f", credible_interval_h1_exp[2])`.
+
+*Delta (δ)* for the between-subject difference in wanting (acceptance bias parameter) between the control and addiction group is **`r sprintf("%.3f", delta_mean_exp)`** with a 95% Credible Interval ranging from `r sprintf("%.3f", delta_ci_exp[1])` to `r sprintf("%.3f", delta_ci_exp[2])`.
+
+```{r}
+#| label: fig-h2-wanting-sensitivity-distribution
+
+# pre-compute group medians for the median indicator points
+medians <- data_params |>
+  group_by(group) |>
+  dplyr::summarise(median_val = median(a_baseline, na.rm = TRUE))
+
+# density plot of devaluation sensitivity, overlaid with interval bands and median points
+ggplot_h2_dens <- data_params |>
+  ggplot2::ggplot(aes(x = a_baseline, fill = group, colour = group)) +
+  ggplot2::geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  # add credible interval bands below the density curve
+  ggdist::stat_interval(
+    aes(y = -0.01),
+    position = position_dodge(width = 0.0175),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.3,
+    show.legend = FALSE
+  ) +
+  # median points using pre-calculated values
+  geom_point(
+    data = medians,
+    aes(x = median_val, y = -0.01, fill = group, colour = group),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.0175, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("addiction" = "Addiction", "control" = "Control")) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("addiction" = "Addiction", "control" = "Control")) +
+  labs(x = "Wanting (α)", y = "Density", fill = "Condition") +
+  scale_x_continuous(limits = c(-6, 6)) +
+  theme_custom() +
+  scale_y_continuous(limits = c(-0.02, NA)) +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.15, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) 
+
+print(ggplot_h2_dens)
+
+saveRDS(ggplot_h2_dens, here::here("output", "rds", "gg_wanting_group_exp2.rds"))
+
+# save high-resolution figure
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "experiment2", "fig-h2-wanting-distribution.png"),
+  plot = ggplot_h2_dens,
+  width = 8,
+  height = 6,
+  dpi = 600
+)
+```
+
+## Hypothesis 2
+
+*Hypothesis 2:* The devaluation sensitivity of *wanting* (acceptance bias parameter) is higher for the control than for the addiction group.
+
+I perform a Bayesian paired samples t-test on the wanting-liking difference, testing for differences between the TikTok and Netflix condition within subjects.
+
+```{r}
+#| label: hypothesis2
+#| tbl-cap: "Bayesian independent t-test for devaluation sensitivity between control and addiction groups"
+
+# bayesian independent-samples t-test: between-group comparison of devaluation sensitivity
+tbf_h2 <- BayesFactor::ttestBF(
+  data_params$devaluation_sens[data_params$group == "control"],
+  data_params$devaluation_sens[data_params$group == "addiction"],
+  paired = FALSE,
+  rscale = 1/3
+)
+
+# extract the bayes factor (bf10)
+bf10_h2 <- extractBF(tbf_h2)$bf
+
+# draw posterior samples
+posterior_samples_h2 <- posterior(tbf_h2, iterations = 10000)
+
+# extract delta standaridsed effect size
+delta_samples_h2 <- posterior_samples_h2[, "delta"]
+
+# extract standardised effect size (delta) and compute credible interval
+credible_interval_h2 <- quantile(posterior_samples_h2[, "delta"], probs = c(0.025, 0.975))
+
+# compute summary statistics for inline reporting
+delta_mean   <- round(mean(delta_samples_h2), 3)
+delta_median <- round(median(delta_samples_h2), 3)
+delta_sd     <- round(sd(delta_samples_h2), 3)
+delta_ci     <- round(quantile(delta_samples_h2, probs = c(0.025, 0.975)), 3)
+```
+
+The ***BF10*** **of `r sprintf("%.3f", bf10_h2)`** indicates weak support for the null hypothesis that devaluation sensitivity is the same for the control and addiction groups. The *95% Credible Interval* of the group difference ranges from `r sprintf("%.3f", credible_interval_h2[1])` to `r sprintf("%.3f", credible_interval_h2[2])`.
+
+*Delta (δ)* for the between-subject difference in devaluation sensitivity between the control and addiction groups is **`r sprintf("%.3f", delta_mean)`** with a 95% Credible Interval ranging from `r sprintf("%.3f", delta_ci[1])` to `r sprintf("%.3f", delta_ci[2])`.
+
+@fig-h2-prior-posterior below illustrates the prior and posterior density for Hypothesis 2.
+
+```{r}
+#| label: fig-h2-prior-posterior
+#| fig-cap: "Prior and posterior density for Hypothesis 2."
+#| fig-width: 8
+#| fig-height: 6
+
+# generate the theoretical cauchy prior density (rscale = 1/3) for comparison with the posterior
+delta_range <- seq(-3, 3, length.out = 1000)
+prior_density <- dcauchy(delta_range, location = 0, scale = 1/3)
+
+plot_data <- data.frame(
+  delta = delta_range,
+  prior = prior_density
+)
+
+# overlay empirical posterior density (from mcmc samples) against the theoretical prior
+ggplot_h2 <- ggplot() +
+  # posterior density estimated from mcmc samples
+  geom_density(data = data.frame(delta = delta_samples_h2),
+               aes(x = delta_samples_h2, fill = "Posterior"), 
+               alpha = 0.6,
+               colour = NA) +
+  # theoretical prior as a dashed line
+  geom_line(data = plot_data,
+            aes(x = delta, y = prior, color = "Prior"),
+            linewidth = 1, linetype = "twodash") +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL) +
+  scale_colour_viridis_d(option = "magma", begin = 0.9, end = 0.8, name = NULL, direction = -1) +
+  labs(x = "Effect size (δ)", 
+       y = "Density",
+       title = "") +
+  scale_x_continuous(limits = c(-1,1)) +
+  scale_y_continuous(limits = c(0,6)) + 
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.9, 0.9),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+
+print(ggplot_h2)
+
+# save high-resolution figure
+ggsave(
+  filename = here::here("output", "figures", "experiment2", "analyses", "fig-h2-prior-posterior.png"),
+  plot = ggplot_h2,
+  width = 8,
+  height = 6,
+  dpi = 600
+)
+```
+
+```{r}
+#| label: fig-h2-distribution
+#| fig-cap: "Distribution of devaluation sensitivity estimates for the control and addiction group"
+#| fig-width: 8
+#| fig-height: 6
+
+# pre-compute group medians for the median indicator points
+medians <- data_params |>
+  group_by(group) |>
+  dplyr::summarise(median_val = median(devaluation_sens, na.rm = TRUE))
+
+# density plot of devaluation sensitivity, overlaid with interval bands and median points
+ggplot_h2_dens <- data_params |>
+  ggplot2::ggplot(aes(x = devaluation_sens, fill = group, colour = group)) +
+  ggplot2::geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  # add credible interval bands below the density curve
+  ggdist::stat_interval(
+    aes(y = -0.01),
+    position = position_dodge(width = 0.0175),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.3,
+    show.legend = FALSE
+  ) +
+  # median points using pre-calculated values
+  geom_point(
+    data = medians,
+    aes(x = median_val, y = -0.01, fill = group, colour = group),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.0175, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("addiction" = "Addiction", "control" = "Control")) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("addiction" = "Addiction", "control" = "Control")) +
+  labs(x = "Devaluation sensitivity", y = "Density", fill = "Condition") +
+  scale_x_continuous(limits = c(-6, 6)) +
+  theme_custom() +
+  scale_y_continuous(limits = c(-0.02, NA)) +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.15, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) 
+
+print(ggplot_h2_dens)
+
+saveRDS(ggplot_h2_dens, here::here("output", "rds", "gg_devaluation_sensitivity_exp2.rds"))
+
+# save high-resolution figure
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "experiment2", "fig-h2-devaluation-sensitivity-distribution.png"),
+  plot = ggplot_h2_dens,
+  width = 8,
+  height = 6,
+  dpi = 800
+)
+```
+
+The devaluation sensitivity distributions for each group showed median values of `r medians$median_val[1] |> round(3)` (Addiction group) and `r medians$median_val[2] |> round(3)` (Control group). It appears the median devaluation sensitivity is higher in the addiction compared to the control group although this difference appears not be statistically meaningful.
+
+To examine this, we perform a follow-up one-sided t-test directly assessing the hypothesised direction of the effect, with increased devaluation sensitivity in the addiction compared to the no-addiction group.
+
+```{r}
+#| label: hypothesis2-followup
+#| tbl-cap: "Bayesian independent t-test for devaluation sensitivity between control and addiction groups"
+
+# one-sided bayesian t-test
+tbf_h2_one <- BayesFactor::ttestBF(
+  data_params$devaluation_sens[data_params$group == "control"],
+  data_params$devaluation_sens[data_params$group == "addiction"],
+  paired = FALSE,
+  rscale = 1/3,
+  nullInterval = c(0, Inf) # one-sided test: only positive effect sizes are considered
+)
+
+# extract bayes factor for the one-sided alternative (index 1)
+bf10_h2_one <- extractBF(tbf_h2_one)$bf
+
+# draw posterior samples restricted to the one-sided hypothesis
+posterior_samples_h2_one <- posterior(tbf_h2_one, iterations = 10000, index = 1)
+
+# extract and summarise the standardised effect size
+delta_samples_h2_one <- posterior_samples_h2_one[, "delta"]
+
+# extract credible interval
+credible_interval_h2_one <- quantile(posterior_samples_h2_one[, "delta"], probs = c(0.025, 0.975))
+
+# compute summary statistics for inline reporting
+delta_mean_one   <- round(mean(delta_samples_h2_one), 3)
+delta_median_one <- round(median(delta_samples_h2_one), 3)
+delta_sd_one     <- round(sd(delta_samples_h2_one), 3)
+delta_ci_one     <- round(quantile(delta_samples_h2_one, probs = c(0.025, 0.975)), 3)
+```
+
+The ***BF10*** **of `r sprintf("%.3f", bf10_h2_one)`** indicates support for the one-sided null hypothesis that devaluation sensitivity is equal to or lower in the addiction compared to the control group. The median standardised effect size is **`r sprintf("%.3f", delta_median_one)`**. The *95% Credible Interval* of the effect size under the one-sided hypothesis ranges from `r sprintf("%.3f", credible_interval_h2_one[1])` to `r sprintf("%.3f", credible_interval_h2_one[2])`.
+
+Below, I examine whether the effect (or lack thereof) changes when considering group differences in age and gender.
+
+```{r}
+#| label: multivariate-model
+#| cache: false
+#| warning: false
+#| error: false
+#| message: false
+
+# bayesian regression model: devaluation sensitivity regressed on group membership, age, gender
+model_h2_cov <- brms::brm(
+  devaluation_sens ~ group + age + gender,
+  data = data_params,
+  family = gaussian(),
+  prior = c(
+    prior(cauchy(0, 0.333), class = b, coef = groupcontrol)  # matches rscale = 1/3
+  ),
+  cores = 4,
+  chains = 4,
+  iter = 10000,
+  warmup = 1000,
+  control = list(max_treedepth = 15, adapt_delta = 0.95)
+)
+
+# summary of posterior
+print(summary(model_h2_cov), digits = 3)
+```
+
+## Hypothesis 3
+
+*Hypothesis 3:* The devaluation sensitivity (α_baseline - α_devalued) is related to self-reported addiction severity (Bergen Social Media Addiction Scale).
+
+I perform a Bayesian correlation using the behavioural proxy of addiction (devaluation sensitivity) and the self-reported addiction scale values for each participant.
+
+```{r}
+#| label: hypothesis3
+#| tbl-cap: "Bayesian correlation between devaluation sensitivity and self-reported social media addiction"
+
+tbf_h3 <- BayesFactor::correlationBF(
+  data_params$devaluation_sens,
+  data_params$bsmas_sum,
+  rscale = 1/3
+)
+
+# extract bayesfactor
+bf10_h3 <- extractBF(tbf_h3)$bf
+
+# draw posterior samples
+posterior_samples_h3 <- posterior(tbf_h3, iterations = 10000)
+
+# extract rho correlation estimate
+rho_samples_h3 <- posterior_samples_h3[, "rho"]
+
+# extract credible interval
+credible_interval_h3 <- quantile(posterior_samples_h3[, "rho"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+rho_mean <- round(mean(rho_samples_h3),3)
+rho_median <- round(median(rho_samples_h3),3)
+rho_sd <- round(sd(rho_samples_h3),3)
+rho_ci <- round(quantile(rho_samples_h3, probs = c(0.025, 0.975)),3)
+```
+
+The ***BF10*** **of `r sprintf("%.3f", bf10_h3)`** indicates strong support for the null hypothesis that the devaluation sensitivity to TikTok rewards does not relate to the corresponding self-reported addiction score.
+
+The correlation estimate is **`r sprintf("%.3f", rho_mean)`**. The *95% Credible Interval* of this correlation ranges from `r sprintf("%.3f", credible_interval_h3[1])` to `r sprintf("%.3f", credible_interval_h3[2])`.
+
+```{r}
+#| label: fig-h3-prior-posterior
+#| fig-cap: "Prior and posterior density for Hypothesis 3."
+#| fig-width: 8
+#| fig-height: 6
+
+# Plot prior and posterior distributions for Hypothesis 1
+delta_range <- seq(-3, 3, length.out = 1000)
+prior_density <- dcauchy(delta_range, location = 0, scale = 1/sqrt(3))
+
+plot_data <- data.frame(
+  delta = delta_range,
+  prior = prior_density
+)
+
+ggplot_h3 <- ggplot() +
+  # Posterior
+  geom_density(data = data.frame(rho = rho_samples_h3),
+               aes(x = rho_samples_h3, fill = "Posterior"), 
+               alpha = 0.6,
+               colour = NA) +
+  # Prior
+  geom_line(data = plot_data,
+            aes(x = delta, y = prior, color = "Prior"),
+            linewidth = 1, linetype = "dashed") +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL) +
+  scale_colour_viridis_d(option = "magma", begin = 0.9, end = 0.8, name = NULL, direction = -1) +
+  labs(x = "Effect size (ρ)", 
+       y = "Density",
+       title = "") + 
+  scale_x_continuous(limits = c(-1,1)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.9, .85),
+        legend.background = element_blank(),
+        legend.key = element_blank())
+
+print(ggplot_h3)
+
+ggsave(
+  filename = here::here("output", "figures", "experiment2", "analyses", "fig-h3-prior-posterior.png"),
+  plot = ggplot_h3,
+  width = 8,
+  height = 6,
+  dpi = 600
+)
+
+# save arranged posterior density plots
+ggpubr::ggarrange(
+  ggplot_h1 + labs (title = "Hypothesis 1"), 
+  ggplot_h2 + labs (title = "Hypothesis 2"), 
+  ggplot_h3 + labs (title = "Hypothesis 3"),
+  ncol = 3, nrow = 1,
+  labels = c("A", "B", "C"),
+  common.legend = TRUE,
+  legend = "bottom"
+) |> ggsave(
+  filename = here::here("output", "figures", "experiment2", "analyses", "fig-prior-posterior-arranged.png"),
+  width = 18,
+  height = 6,
+  dpi = 600,
+  bg = "white"
+)
+```
+
+@fig-h3-scatter illustrates the distribution of devaluation sensitivity scores for the control and addiction groups across the range of social media addiction scores on the Bergen Social Media Addiction Scale.
+
+```{r}
+#| label: fig-h3-scatter
+#| fig-cap: "Correlation between devaluation sensitivity and social media addiction scores"
+#| fig-width: 8
+#| fig-height: 6
+
+# Calculate medians for each group
+medians <- data_params |>
+  group_by(group) |>
+  dplyr::summarise(median_val = median(devaluation_sens, na.rm = TRUE))
+
+ggplot_h3_scatt <- data_params |>
+  ggplot(aes(y = bsmas_sum, x = devaluation_sens)) +
+
+  # scatterplot with jitter for visibility
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45,
+    alpha = 0.85,
+    height = 0.15,
+    size = 2.8,
+    shape = 19,
+    stroke = 0.8
+  ) +
+  
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
+  ) +
+  # add regression equation - one per group
+  ggpmisc::stat_poly_eq(
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 5
+  ) +
+
+  # Enhanced color scales with transparency
+      scale_fill_viridis_d(
+    option = "magma",
+    begin = 0.3,
+    end = 0.7,
+    name = NULL,
+    alpha = 0.4,
+    guide = "none", labels = c("addiction" = "Addiction", "control" = "Control")) +
+  scale_colour_viridis_d(
+    option = "magma",
+    begin = 0.3,
+    end = 0.7,
+    name = NULL,
+    guide = guide_legend(
+      override.aes = list(
+        size = 3.5,
+        alpha = 1,
+        stroke = 1.2
+      )
+    ), labels = c("addiction" = "Addiction", "control" = "Control")) +
+
+  # Professional labels with units/hints if applicable
+  labs(
+    x = "Devaluation sensitivity",
+    y = "Self-reported addiction"
+  ) +
+
+  # Improved axis scaling and breaks
+  scale_x_continuous(
+    breaks = seq(-6, 8, 2),
+    limits = c(-6.5, 8.5),
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    breaks = seq(5, 30, 5),
+    limits = c(4, 31),
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+
+  # Custom theme enhancements
+  theme_custom() +
+  theme(
+    legend.position = c(0.15, 0.925),
+    legend.background = element_blank(),
+    legend.key = element_blank(),
+  )
+
+print(ggplot_h3_scatt)
+
+saveRDS(ggplot_h3_scatt, here::here("output", "rds", "gg_dsbsmas_exp2.rds"))
+
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "experiment2", "fig-h3-devaluation-sma-scatter.png"),
+  plot = ggplot_h3_scatt,
+  width = 8,
+  height = 6,
+  dpi = 600
+)
+
+# combined presentation of hypothesis plots
+ggpubr::ggarrange(
+  ggplot_h1_dens + labs(title = "Hypothesis 1") + theme(legend.position = "bottom"),
+  ggplot_h2_dens + labs(title = "Hypothesis 2") + theme(legend.position = "bottom"),
+  ggplot_h3_scatt + labs(title = "Hypothesis 3", x = "Addiction") + theme(
+    legend.position = "bottom",
+    legend.text = element_blank(),
+    legend.title = element_blank()
+  ) + guides(
+    color = guide_legend(override.aes = list(alpha = 0, size = 0)),
+    fill = guide_legend(override.aes = list(alpha = 0, size = 0))
+  ),
+  ncol = 3, nrow = 1,
+  labels = c("A", "B", "C"),
+  common.legend = FALSE
+) |> ggsave(
+  filename = here::here("output", "figures", "experiment2", "analyses", "fig-hypotheses-combined.png"),
+  width = 18,
+  height = 6,
+  dpi = 800,
+  bg = "white"
+)
+```
+
+Likewise, we can examine the correlation between the wanting-liking dissociation for TikTok rewards observed at baseline.
+
+```{r}
+tbf_wl <- BayesFactor::correlationBF(
+  data_params$wl_baseline,
+  data_params$bsmas_sum,
+  rscale = 1/3
+)
+
+# extract bayesfactor
+bf10_wl <- extractBF(tbf_wl)$bf
+
+# draw posterior samples
+posterior_samples_wl <- posterior(tbf_wl, iterations = 10000)
+
+# extract rho correlation estimate
+rho_samples_wl <- posterior_samples_wl[, "rho"]
+
+# extract credible interval
+credible_interval_wl <- quantile(posterior_samples_wl[, "rho"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+rho_mean <- round(mean(rho_samples_wl),3)
+rho_median <- round(median(rho_samples_wl),3)
+rho_sd <- round(sd(rho_samples_wl),3)
+rho_ci <- round(quantile(rho_samples_wl, probs = c(0.025, 0.975)),3)
+```
+
+### Wanting and self-reported addiction
+
+```{r}
+#| label: explore-wanting-bsmas
+#| cache: false
+
+# Wanting TikTok: Bayesian correlation
+tbf_corr_want <- BayesFactor::correlationBF(
+  data_params$a_baseline,
+  data_params$bsmas_sum,
+  rscale = 1/3
+)
+
+# extract the Bayes factor value
+bf_want <- exp(tbf_corr_want@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf_corr_want, iterations = 10000)
+
+# calculate the mean of the posterior distribution for rho correlation estimate
+estimated_correlation <- mean(posterior_samples[, "rho"])
+estimated_correlation_med <- median(posterior_samples[, "rho"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+```
+
+The Bayes Factor is ***BF01*** **of `r sprintf("%.3f", bf_want)`**. The 95% Credible Interval of the correlation between the wanting parameter and self-reported addiction scores for TikTok ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`. The correlation estimate is `r sprintf("%.3f", estimated_correlation)`.
+
+```{r}
+#| label: fig-bsmas-want
+#| fig-cap: "Association between Bergen Social Media Addiction Scale and Wanting"
+#| fig-align: center
+#| out-width: "95%"
+
+# Calculate medians for each group
+medians <- data_params |>
+  group_by(group) |>
+  dplyr::summarise(median_val = median(a_baseline, na.rm = TRUE))
+
+ggplot_exp_scatt <- data_params |>
+  ggplot(aes(y = bsmas_sum, x = a_baseline)) +
+
+  # scatterplot with jitter for visibility
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45,
+    alpha = 0.85,
+    height = 0.15,
+    size = 2.8,
+    shape = 19,
+    stroke = 0.8
+  ) +
+  
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
+  ) +
+  # add regression equation - one per group
+  ggpmisc::stat_poly_eq(
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 5
+  ) +
+
+  # Enhanced color scales with transparency
+      scale_fill_viridis_d(
+    option = "magma",
+    begin = 0.3,
+    end = 0.7,
+    name = NULL,
+    alpha = 0.4,
+    guide = "none", labels = c("addiction" = "Addiction", "control" = "Control")) +
+  scale_colour_viridis_d(
+    option = "magma",
+    begin = 0.3,
+    end = 0.7,
+    name = NULL,
+    guide = guide_legend(
+      override.aes = list(
+        size = 3.5,
+        alpha = 1,
+        stroke = 1.2
+      )
+    ), labels = c("addiction" = "Addiction", "control" = "Control")) +
+
+  # Professional labels with units/hints if applicable
+  labs(
+    x = "Wanting",
+    y = "Self-reported addiction"
+  ) +
+
+  # Improved axis scaling and breaks
+  scale_x_continuous(
+    breaks = seq(-6, 8, 2),
+    limits = c(-6.5, 8.5),
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    breaks = seq(5, 30, 5),
+    limits = c(4, 31),
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+
+  # Custom theme enhancements
+  theme_custom() +
+  theme(
+    legend.position = c(0.15, 0.925),
+    legend.background = element_blank(),
+    legend.key = element_blank(),
+  )
+
+print(ggplot_exp_scatt)
+
+saveRDS(ggplot_h3_scatt, here::here("output", "rds", "gg_wantingbsmas_exp2.rds"))
+```
+
+# Group Difference
+
+Examine group differences in liking at baseline.
+
+```{r}
+#| label: group-differences-liking
+#| tbl-cap: "Bayesian independent t-test for group differences in liking at baseline and devaluation"
+#| warning: false
+#| message: false
+#| echo: false
+
+
+tbf_1 <- BayesFactor::ttestBF(data_params$liking_b[data_params$group == "control"],
+        data_params$liking_b[data_params$group == "addiction"],
+        paired = FALSE,
+        rscale = 1/3)
+
+# extract bayesfactor
+bf10_tbf <- extractBF(tbf_1)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf_1, iterations = 10000, index = 1)
+
+# extract delta standaridsed effect size
+delta_posterior_samples <- posterior_samples[, "delta"]
+
+# extract credible interval
+credible_interval_tbf <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+delta_mean_one   <- round(mean(delta_posterior_samples), 3)
+delta_median_one <- round(median(delta_posterior_samples), 3)
+delta_sd_one     <- round(sd(delta_posterior_samples), 3)
+delta_ci_one     <- round(quantile(delta_posterior_samples, probs = c(0.025, 0.975)), 3)
+```
+
+Examine group differences in liking at devaluation.
+
+```{r}
+#| label: group-differences-liking-devaluation
+#| tbl-cap: "Bayesian independent t-test for group differences in liking at devaluation"
+#| warning: false
+#| message: false
+#| echo: false
+
+tbf_2 <- BayesFactor::ttestBF(data_params$liking_d[data_params$group == "control"],
+        data_params$liking_d[data_params$group == "addiction"],
+        paired = FALSE,
+        rscale = 1/3)
+
+# extract bayesfactor
+bf10_tbf <- extractBF(tbf_2)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf_2, iterations = 10000, index = 1)
+
+# extract delta standaridsed effect size
+delta_posterior_samples <- posterior_samples[, "delta"]
+
+# extract credible interval
+credible_interval_tbf <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+delta_mean_one   <- round(mean(delta_posterior_samples), 3)
+delta_median_one <- round(median(delta_posterior_samples), 3)
+delta_sd_one     <- round(sd(delta_posterior_samples), 3)
+delta_ci_one     <- round(quantile(delta_posterior_samples, probs = c(0.025, 0.975)), 3)
+```
+
+Examine difference scores.
+
+```{r}
+#| label: group-differences-liking-diff
+#| tbl-cap: "Bayesian independent t-test for group differences in liking difference scores (liking_b - liking_d)"
+#| warning: false
+#| message: false
+#| echo: false
+
+data_params %<>%
+  dplyr::mutate(liking_diff = liking_b - liking_d) 
+
+tbf_3 <- BayesFactor::ttestBF(data_params$liking_diff[data_params$group == "control"],
+                     data_params$liking_diff[data_params$group == "addiction"],
+                     paired = FALSE, rscale = 1/3)
+
+# extract bayesfactor
+bf10_tbf <- extractBF(tbf_3)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf_3, iterations = 10000, index = 1)
+
+# extract delta standaridsed effect size
+delta_posterior_samples <- posterior_samples[, "delta"]
+
+# extract credible interval
+credible_interval_tbf <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+delta_mean_one   <- round(mean(delta_posterior_samples), 3)
+delta_median_one <- round(median(delta_posterior_samples), 3)
+delta_sd_one     <- round(sd(delta_posterior_samples), 3)
+delta_ci_one     <- round(quantile(delta_posterior_samples, probs = c(0.025, 0.975)), 3)
+```
+
+The Bayesfactor for the group difference in liking at baseline is **`r sprintf("%.3f", bf10_tbf)`**. The median standardised effect size is **`r sprintf("%.3f", delta_median_one)`** with a 95% Credible Interval ranging from `r sprintf("%.3f", delta_ci_one[1])` to `r sprintf("%.3f", delta_ci_one[2])`.
+
+Next, we fit a linear regression model examining the differential effectiveness of the devaluation manipulation for the two groups, taking into consideration the group differences in liking.
+
+```{r}
+#| label: regression-devaluation-sensitivity
+#| cache: false
+#| warning: false
+#| message: false
+
+# devaluation sensitivity taking into consideration the liking difference effect
+brms_mod <- brms::brm(
+  devaluation_sens ~ group + age + liking_diff, data = data_params, family = gaussian()
+)
+
+print(summary(brms_mod), digits = 3)
+```
+
+# Replication
+
+In a previous experiment we examined whether social media users exhibit 'incentive sensitisation' for social media rewards. To this end, we quantified the relative strength of participants' *wanting* and *liking* of TikTok and Netflix rewards. We can perform a similar analysis here by quantifying the relative strength of *wanting* and *liking* for the baseline condition.
+
+```{r}
+#| label: fig-wl-baseline
+#| fig-cap: "Wanting-liking difference for TikTok rewards presented for the addicted and control group."
+#| fig-width: 8
+#| fig-height: 6
+
+# apply z-transformation for consistent formatting 
+a_mean <- mean(c(data_params$a_devalued, data_params$a_baseline), na.rm = TRUE)
+a_sd <- sd(c(data_params$a_devalued, data_params$a_baseline), na.rm = TRUE)
+
+# get the mean and standard deviation for liking estimates (across conditions)
+strap_mean <- mean(c(data_params$liking_b, data_params$liking_d), na.rm = TRUE)
+strap_sd <- sd(c(data_params$liking_b, data_params$liking_d), na.rm = TRUE)
+
+# z-transform variables
+data_params <- data_params |>
+  dplyr::mutate(
+    # wanting estimates
+    a_devalued_z = (a_devalued - a_mean) / a_sd,
+    a_baseline_z = (a_baseline - a_mean) / a_sd,
+    
+    # liking estimates
+    strap_devalued_avg_z = (liking_d - strap_mean) / strap_sd,
+    strap_baseline_avg_z = (liking_b - strap_mean) / strap_sd,
+    
+    # wanting liking difference
+    wl_baseline_z = a_baseline_z - strap_baseline_avg_z,
+    wl_devalued_z = a_devalued_z - strap_devalued_avg_z
+  )
+
+# format data to include wanting-liking dissociations
+data_params %<>%
+  dplyr::mutate(wl_baseline = a_baseline - liking_b,
+         wl_devalued = a_devalued - liking_d)
+
+medians <- data_params |>
+  group_by(group) |>
+  dplyr::summarise(median_val = median(wl_baseline_z, na.rm = TRUE))
+
+p_wl_diff_dens <- data_params |>
+  ggplot(aes(x = wl_baseline_z, fill = group)) +
+  geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  ggdist::stat_interval(
+    aes(y = -0.025, colour = group),
+    position = position_dodge(width = 0.04),
+    orientation = "horizontal",
+    linewidth = 3,
+    alpha = 0.3,
+    show.legend = FALSE
+  ) +
+    geom_point(
+    data = medians,
+    aes(x = median_val, y = -0.025, fill = group, colour = group),
+    size = 2,
+    shape = 19,
+    alpha = 1,
+    stroke = 1,
+    position = position_dodge(width = 0.04, orientation = "y"),
+    inherit.aes = FALSE,
+    show.legend = FALSE
+  ) +
+  theme_bw() +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("addiction" = "Addiction", "control" = "Control")) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL,  labels = c("addiction" = "Addiction", "control" = "Control")) +
+  theme_custom() +
+  scale_x_continuous(limits = c(NA, NA), breaks = seq(-4,4,1)) +
+  scale_y_continuous(breaks = seq(0, 0.4, 0.1), limits = c(-0.05, 0.45)) +
+  theme_custom() +
+  theme(legend.title = element_blank(),
+        legend.position = c(0.15, 0.925),
+        legend.background = element_blank(),
+        legend.key = element_blank()) +
+  labs(x = "Wanting-liking dissociation (z)", y = "Density", fill = "Condition")
+
+saveRDS(p_wl_diff_dens, here::here("output", "rds", "gg_wantlike_exp2.rds"))
+
+print(p_wl_diff_dens)
+
+ggplot2::ggsave(
+  filename = here::here("output", "figures", "experiment2", "fig-wl-baseline-distribution.png"),
+  plot = p_wl_diff_dens, width = 8, height = 6, dpi = 800, bg = "white"
+)
+```
+
+@fig-wl-baseline illustrates the distribution of wanting-liking dissociation scores for the control and addiction group. Here, positive values indicate higher *wanting* than *liking*, whereas negative values indicate higher *liking* than *wanting*. The distributions of the two groups look highly similar and we furhter investigate this in the subsequent chunk.
+
+```{r}
+#| label: replication-wldifference
+#| tbl-cap: "Bayesian correlation between wanting-liking dissociation and self-reported"
+
+tbf_rep <- BayesFactor::ttestBF(data_params$wl_baseline[data_params$group == "control"],
+                     data_params$wl_baseline[data_params$group == "addiction"],
+                     paired = FALSE, rscale = 1/3)
+
+# extract bayesfactor
+bf10_tbf <- extractBF(tbf_rep)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf_rep, iterations = 10000, index = 1)
+
+# extract delta standaridsed effect size
+delta_posterior_samples <- posterior_samples[, "delta"]
+
+# extract credible interval
+credible_interval_tbf <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+delta_mean   <- round(mean(delta_posterior_samples), 3)
+delta_median <- round(median(delta_posterior_samples), 3)
+delta_sd     <- round(sd(delta_posterior_samples), 3)
+delta_ci     <- round(quantile(delta_posterior_samples, probs = c(0.025, 0.975)), 3)
+```
+
+The Bayesfactor for the correlation between the wanting-liking dissociation at baseline and the self-reported addiction score is **`r sprintf("%.3f", bf10_tbf)`**. The median standardised effect size is **`r sprintf("%.3f", delta_median)`** with a 95% Credible Interval ranging from `r sprintf("%.3f", delta_ci[1])` to `r sprintf("%.3f", delta_ci[2])`.
+
+Next, I visualised the correlation between these scores and the self-reported TikTok addiction (BSMAS)
+
+```{r}
+gg_wlbsmas_exp2 <- data_params |>
+  ggplot(aes(y = bsmas_sum, x = wl_baseline_z)) +
+
+  # scatterplot with jitter for visibility
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45,
+    alpha = 0.85,
+    height = 0.15,
+    size = 2.8,
+    shape = 19,
+    stroke = 0.8
+  ) +
+  
+    # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
+  ) +
+  # add regression equation - one per group
+  ggpmisc::stat_poly_eq(
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 5
+  ) +
+  scale_colour_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7, name = NULL, labels = c("addiction" = "Addiction", "control" = "Control")) +
+  scale_fill_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7,
+    name = NULL, guide = "none", labels = c("addiction" = "Addiction", "control" = "Control")) +
+  labs(x = "Wanting-liking dissociation (z)", y = "Self-reported addiction") +
+  scale_y_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() +
+  theme(legend.position = c(0.15, 0.925), legend.background = element_blank(), legend.key = element_blank())
+
+saveRDS(gg_wlbsmas_exp2, here::here("output", "rds", "gg_wlbsmas_exp2.rds"))
+
+```
+
+```{r}
+#|label: wl-explore-ttest
+
+#| label: wl-bayesian-results
+#| tbl-cap: "Bayesian independent t-test results"
+
+# bayesian independent ttest
+tbf_diff <- BayesFactor::ttestBF(
+  data_params$wl_baseline[data_params$group == "control"],
+  data_params$wl_baseline[data_params$group == "addiction"],
+  paired = FALSE,
+  rscale = 1/3
+)
+
+bf <- exp(tbf_diff@bayesFactor$bf)
+posterior <- BayesFactor::posterior(tbf_diff, iterations = 10000)
+delta <- as.vector(posterior[, "delta"])
+
+# results to demonstrate in table
+results <- data.frame(
+  `Bayes Factor (BF₁₀)` = sprintf("%.3f", bf),
+  `Effect Size (δ)` = sprintf("%.3f", mean(delta)),
+  `95% CI` = sprintf("[%.3f, %.3f]", 
+                     quantile(delta, 0.025), 
+                     quantile(delta, 0.975)),
+  `P(δ > 0.2)` = sprintf("%.3f%%", mean(delta > 0.2) * 100),
+  check.names = FALSE
+)
+
+# table output
+knitr::kable(results, align = "c") |>
+  kableExtra::kable_styling(
+    bootstrap_options = c("striped", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  )
+```
+
+We further examine other potential correlates of the wanting-liking association.
+
+```{r}
+tbf_exp1 <- BayesFactor::correlationBF(
+  data_params$wl_baseline,
+  data_params$bisr21_sum,
+  rscale = 1/3
+)
+
+# extract bayesfactor
+bf10_exp1 <- extractBF(tbf_exp1)$bf
+
+# draw posterior samples
+posterior_samples_exp1 <- posterior(tbf_exp1, iterations = 10000)
+
+# extract rho correlation estimate
+rho_samples_exp1 <- posterior_samples_exp1[, "rho"]
+
+# extract credible interval
+credible_interval_exp1 <- quantile(posterior_samples_exp1[, "rho"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+rho_mean <- round(mean(rho_samples_exp1),3)
+rho_median <- round(median(rho_samples_exp1),3)
+rho_sd <- round(sd(rho_samples_exp1),3)
+rho_ci <- round(quantile(rho_samples_exp1, probs = c(0.025, 0.975)),3)
+```
+
+The ***BF10*** **of `r sprintf("%.3f", bf10_exp1)`** indicates strong support for the null hypothesis that the wanting-liking dissociation at baseline does not relate to the corresponding self-reported impulsivity score. The correlation estimate is **`r sprintf("%.3f", rho_mean)`**. The 95% Credible Interval of this correlation ranges from `r sprintf("%.3f", credible_interval_exp1[1])` to `r sprintf("%.3f", credible_interval_exp1[2])`.
+
+#### Condition differences in computational parameters
+
+##### Reward sensitivity
+
+```{r}
+tbf <- BayesFactor::ttestBF(
+  data_params$kR_baseline,
+  data_params$kR_devalued,
+  paired = TRUE,
+  rscale = 1/3,
+)
+
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation_med <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+tbf_chains <- BayesFactor::posterior(tbf, iterations = 10000)
+base::summary(tbf_chains)
+plot(tbf_chains[, "delta"])
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates strong support for the alternative hypothesis that *reward sensitivity* does differ between the baseline and devalued conditions within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+##### Effort sensitivity
+
+```{r}
+tbf <- BayesFactor::ttestBF(
+  data_params$kE_baseline,
+  data_params$kE_devalued,
+  paired = TRUE,
+  rscale = 1/3,
+)
+
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation_med <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+tbf_chains <- BayesFactor::posterior(tbf, iterations = 10000)
+base::summary(tbf_chains)
+plot(tbf_chains[, "delta"])
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates weak support for the null hypothesis that *effort sensitivity* does not differ between the TikTok and Netflix conditions within subjects. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: fig-difference-params
+#| fig-cap: "Distributions of effort and reward sensitivity parameters for TikTok and Netflix"
+#| fig-align: center
+#| out-width: "95%"
+
+p_eff <- data_params |>
+  # create a longer format dataset that includes both baseline and devalued data
+  tidyr::pivot_longer(
+    cols = c(kE_baseline, kE_devalued),
+    names_to = "condition_ke",
+    values_to = "effort_sensitivity"
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = effort_sensitivity, fill = condition_ke)) +
+  geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  theme_bw() +
+  scale_fill_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7, name = NULL,
+    labels = c("kE_baseline" = "Baseline", "kE_devalued" = "Devalued")
+  ) + 
+  scale_x_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  scale_y_continuous(breaks = seq(0,2,.5)) +
+  theme(legend.position="right", legend.direction = "vertical") + 
+  labs(x = "Effort sensitivity", y = "Density", fill = "Condition") 
+
+p_rew <- data_params |>
+  # create a longer format dataset that includes both baseline and devalued data
+  tidyr::pivot_longer(
+    cols = c(kR_baseline, kR_devalued),
+    names_to = "condition_kr",
+    values_to = "reward_sensitivity"
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = reward_sensitivity, fill = condition_kr)) +
+  geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  theme_bw() +
+  scale_fill_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7, name = NULL,
+    labels = c("kR_baseline" = "Baseline", "kR_devalued" = "Devalued")
+  ) +
+  scale_x_continuous(breaks = seq(0,6,1), limits = c(0, 6)) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,0.6)) +
+  labs(x = "Reward sensitivity", y = "Density", fill = "Condition")
+
+# create combined plot
+combined_plot <- ggpubr::ggarrange(
+  p_rew, p_eff,
+  ncol = 2,
+  labels = c("C", "D"),
+  common.legend = TRUE,
+  legend = "right"
+)
+
+saveRDS(combined_plot, file = here::here("output", "rds", "kekr_parameter_distributions_exp2.rds"))
+
+# save the main plot without legend
+ggplot2::ggsave(
+  filename = "kekr_parameter_distributions.png", 
+  plot = combined_plot, 
+  path = here::here("output", "figures", "experiment2"),
+  dpi = 800, width = 10, height = 5, bg = "white"
+)
+```
+
+Likewise, we can examine differences in free parameters between the self-reported addiction and control group.
+
+##### Reward sensitivity
+
+```{r}
+tbf <- BayesFactor::ttestBF(
+  data_params$kR_baseline[data_params$group == "control"],
+  data_params$kR_baseline[data_params$group == "addiction"],
+  paired = FALSE,
+  rscale = 1/3,
+)
+
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation_med <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+tbf_chains <- BayesFactor::posterior(tbf, iterations = 10000)
+base::summary(tbf_chains)
+plot(tbf_chains[, "delta"])
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates support for the null hypothesis that *reward sensitivity* does not differ between the addiction and control group at baseline. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+##### Effort sensitivity
+
+```{r}
+tbf <- BayesFactor::ttestBF(
+  data_params$kE_baseline[data_params$group == "addiction"],
+  data_params$kE_baseline[data_params$group == "control"],
+  paired = FALSE,
+  rscale = 1/3,
+)
+
+bf <- exp(tbf@bayesFactor$bf)
+
+# extract the posterior samples
+posterior_samples <- BayesFactor::posterior(tbf, iterations = 10000)
+
+# calculate the mean of the posterior distribution for delta
+estimated_correlation <- mean(posterior_samples[, "delta"])
+estimated_correlation_med <- median(posterior_samples[, "delta"])
+
+# get 95% credible interval
+credible_interval <- quantile(posterior_samples[, "delta"], probs = c(0.025, 0.975))
+
+tbf_chains <- BayesFactor::posterior(tbf, iterations = 10000)
+base::summary(tbf_chains)
+plot(tbf_chains[, "delta"])
+```
+
+The ***BF01*** **of `r round(bf, 3)`** indicates strong support for the null hypothesis that *effort sensitivity* does not differ between the addiction and control groups. The *95% Credible Interval* of the condition difference ranges from `r sprintf("%.3f", credible_interval[1])` to `r sprintf("%.3f", credible_interval[2])`.
+
+```{r}
+#| label: fig-difference-params-kekr
+#| fig-cap: "Distributions of effort and reward sensitivity parameters for TikTok and Netflix"
+#| fig-align: center
+#| out-width: "95%"
+
+p_eff <- data_params |>
+  # create a longer format dataset that includes both baseline and devalued data
+  tidyr::pivot_longer(
+    cols = c(kE_baseline, kE_devalued),
+    names_to = "condition_ke",
+    values_to = "effort_sensitivity"
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = effort_sensitivity, fill = condition_ke)) +
+  geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  theme_bw() +
+  scale_fill_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7, name = NULL,
+    labels = c("kE_baseline" = "Baseline", "kE_devalued" = "Devalued")
+  ) + 
+  scale_x_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  scale_y_continuous(breaks = seq(0,2,.5)) +
+  theme(legend.position="right", legend.direction = "vertical") + 
+  labs(x = "Effort sensitivity", y = "Density", fill = "Condition") 
+
+p_rew <- data_params |>
+  # create a longer format dataset that includes both baseline and devalued data
+  tidyr::pivot_longer(
+    cols = c(kR_baseline, kR_devalued),
+    names_to = "condition_kr",
+    values_to = "reward_sensitivity"
+  ) |>
+  # create plot
+  ggplot2::ggplot(aes(x = reward_sensitivity, fill = condition_kr)) +
+  geom_density(alpha = .7, outline.type = "lower", colour = NA) +
+  theme_bw() +
+  scale_fill_viridis_d(
+    option = "magma", begin = 0.3, end = 0.7, name = NULL,
+    labels = c("kR_baseline" = "Baseline", "kR_devalued" = "Devalued")
+  ) +
+  scale_x_continuous(breaks = seq(0,6,1), limits = c(0, 6)) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,0.6)) +
+  labs(x = "Reward sensitivity", y = "Density", fill = "Condition")
+
+# create combined plot
+combined_plot <- ggpubr::ggarrange(
+  p_rew, p_eff,
+  ncol = 2,
+  labels = c("C", "D"),
+  common.legend = TRUE,
+  legend = "right"
+)
+
+saveRDS(combined_plot, file = here::here("output", "rds", "kekr_parameter_distributions_exp2.rds"))
+
+# save the main plot without legend
+ggplot2::ggsave(
+  filename = "kekr_parameter_distributions.png", 
+  plot = combined_plot, 
+  path = here::here("output", "figures", "experiment2"),
+  dpi = 800, width = 10, height = 5, bg = "white"
+)
+
+combined_plot
+```
+
+
+
+### Self-reported addiction correlates
+
+Below, we examine correlations between other computational parameters (effort sensitivity, reward sensitivity) and self-reported levels of social media addiction (TikTok, BSMAS).
+
+We use Bayesian correlations to examine the above.
+
+```{r}
+tbf <- BayesFactor::correlationBF(
+  data_params$kR_baseline,
+  data_params$bsmas_sum,
+  rscale = 1/3
+)
+
+# extract bayesfactor
+bf10 <- extractBF(tbf)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf, iterations = 10000)
+
+# extract rho correlation estimate
+rho_samples <- posterior_samples[, "rho"]
+
+# extract credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+rho_mean <- round(mean(rho_samples),3)
+rho_median <- round(median(rho_samples),3)
+rho_sd <- round(sd(rho_samples),3)
+rho_ci <- round(quantile(rho_samples, probs = c(0.025, 0.975)),3)
+```
+
+```{r}
+tbf <- BayesFactor::correlationBF(
+  data_params$kE_baseline,
+  data_params$bsmas_sum,
+  rscale = 1/3
+)
+
+# extract bayesfactor
+bf10 <- extractBF(tbf)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf, iterations = 10000)
+
+# extract rho correlation estimate
+rho_samples <- posterior_samples[, "rho"]
+
+# extract credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+rho_mean <- round(mean(rho_samples),3)
+rho_median <- round(median(rho_samples),3)
+rho_sd <- round(sd(rho_samples),3)
+rho_ci <- round(quantile(rho_samples, probs = c(0.025, 0.975)),3)
+```
+
+Same correlations as above but for the devalued condition.
+
+```{r}
+tbf <- BayesFactor::correlationBF(
+  data_params$kR_devalued,
+  data_params$bsmas_sum,
+  rscale = 1/3
+)
+
+# extract bayesfactor
+bf10 <- extractBF(tbf)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf, iterations = 10000)
+
+# extract rho correlation estimate
+rho_samples <- posterior_samples[, "rho"]
+
+# extract credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+rho_mean <- round(mean(rho_samples),3)
+rho_median <- round(median(rho_samples),3)
+rho_sd <- round(sd(rho_samples),3)
+rho_ci <- round(quantile(rho_samples, probs = c(0.025, 0.975)),3)
+```
+
+```{r}
+tbf <- BayesFactor::correlationBF(
+  data_params$kE_devalued,
+  data_params$bsmas_sum,
+  rscale = 1/3
+)
+
+# extract bayesfactor
+bf10 <- extractBF(tbf)$bf
+
+# draw posterior samples
+posterior_samples <- posterior(tbf, iterations = 10000)
+
+# extract rho correlation estimate
+rho_samples <- posterior_samples[, "rho"]
+
+# extract credible interval
+credible_interval <- quantile(posterior_samples[, "rho"], probs = c(0.025, 0.975))
+
+# compute posterior statistics from samples
+rho_mean <- round(mean(rho_samples),3)
+rho_median <- round(median(rho_samples),3)
+rho_sd <- round(sd(rho_samples),3)
+rho_ci <- round(quantile(rho_samples, probs = c(0.025, 0.975)),3)
+```
+
+#### Visualisations
+
+```{r}
+
+# acceptance bias (baseline)
+ggplot_a_base <- data_params |>
+  ggplot(aes(x = bsmas_sum, y = a_baseline)) +
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = "Group", labels = c("Addiction", "No Addiction"),
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Wanting (b)") +
+  scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() +
+  theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank())
+
+# acceptance bias (devalued)
+ggplot_a_deval <- data_params |>
+  ggplot(aes(x = bsmas_sum, y = a_devalued)) +
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Wanting (d)") +
+  scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() +
+  theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank()) 
+
+# reward sensitivity (baseline)
+ggplot_kr_base <- data_params |>
+  ggplot(aes(x = bsmas_sum, y = kR_baseline)) +
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Reward sensitivity (b)") +
+  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 6), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() +
+  theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank()) 
+
+
+# reward sensitivity (devalued)
+ggplot_kr_deval <- data_params |>
+  ggplot(aes(x = bsmas_sum, y = kR_devalued)) +
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Reward sensitivity (d)") +
+  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 6), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() +
+  theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank())
+
+# effort sensitivity (baseline)
+ggplot_ke_base <- data_params |>
+  ggplot(aes(x = bsmas_sum, y = kE_baseline)) +
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Effort sensitivity (b)") +
+  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() +
+  theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank()) 
+
+# reward sensitivity (devalued)
+ggplot_ke_deval <- data_params |>
+  ggplot(aes(x = bsmas_sum, y = kE_devalued)) +
+  geom_jitter(aes(fill = group, colour = group),
+    width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
+  ) +
+  geom_smooth(aes(group = 1),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+  ) +
+  ggpmisc::stat_poly_eq(
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
+    coef.digits = 3, parse = TRUE, size = 5
+  ) +
+  scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
+                         guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
+  ) +
+  scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
+  labs(x = "Self-reported addiction", y = "Effort sensitivity (d)") +
+  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
+  theme_custom() +
+  theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank())
+
+# add plot margins
+
+legend <- ggpubr::get_legend(ggplot_a_base + theme(legend.position = "bottom", legend.direction = "horizontal"))
+
+a_base_m <- ggMarginal(ggplot_a_base + theme(legend.position = "none", axis.title.x = element_blank()),
+                       type = "density", groupColour = FALSE, groupFill = TRUE, margins = "y", alpha = .9, colour = NA)
+a_deval_m <- ggMarginal(ggplot_a_deval + theme(legend.position = "none"), 
+                        type = "density", groupColour = FALSE, groupFill = TRUE, margins = "y", alpha = .9, colour = NA)
+kr_base_m <- ggMarginal(ggplot_kr_base + theme(legend.position = "none", axis.title.x = element_blank()),
+                        type = "density", groupColour = FALSE, groupFill = TRUE, margins = "y", alpha = .9, colour = NA)
+kr_deval_m <- ggMarginal(ggplot_kr_deval + theme(legend.position = "none"), 
+                         type = "density", groupColour = FALSE, groupFill = TRUE, margins = "y", alpha = .9, colour = NA)
+ke_base_m <- ggMarginal(ggplot_ke_base + theme(legend.position = "none", axis.title.x = element_blank()),
+                        type = "density", groupColour = FALSE, groupFill = TRUE, margins = "y", alpha = .9, colour = NA)
+ke_deval_m <- ggMarginal(ggplot_ke_deval + theme(legend.position = "none"), 
+                         type = "density", groupColour = FALSE, groupFill = TRUE, margins = "y", alpha = .9, colour = NA)
+
+# arrange plots
+plots <- cowplot::plot_grid(
+  ggplotify::as.ggplot(a_base_m),
+  ggplotify::as.ggplot(kr_base_m),
+  ggplotify::as.ggplot(ke_base_m),
+  ggplotify::as.ggplot(a_deval_m),
+  ggplotify::as.ggplot(kr_deval_m),
+  ggplotify::as.ggplot(ke_deval_m),
+  ncol = 3, nrow = 2,
+  labels = c("A", "B", "C", "D", "E", "F"),
+  label_fontface = "bold"
+)
+
+# add legend
+combined <- cowplot::plot_grid(
+  plots,
+  legend,
+  ncol = 1,
+  rel_heights = c(1, 0.08)
+)
+
+ggsave(
+  filename = "parameter_sma_correlations.png",
+  plot = combined,
+  path = here::here("output", "figures", "experiment2"),
+  dpi = 800, width = 10, height = 6, bg = "white"
+)
+
+plots
+```
