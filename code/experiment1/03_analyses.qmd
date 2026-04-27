@@ -1539,21 +1539,19 @@ mainplot <- data_params |>
     shape = 19,
     stroke = 0.8
   ) +
-    # regression line - one per platform
-  geom_smooth(aes(group = platform, color = platform, fill = platform),
-              method = "lm", se = TRUE, show.legend = FALSE,
-              linewidth = 1.2, alpha = 0.25, linetype = "solid") +
-  # Add regression equation - one per platform
+  # regression line
+  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE, color = "gray15", fill = "gray30", 
+              linewidth = 1.2, alpha = 0.25,linetype = "solid") +
+  # Add regression equation
   ggpmisc::stat_poly_eq(
-    aes(group = platform, color = platform,
-        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x,
     label.x = "right",
-    label.y = c(0.95, 0.85),  # stagger vertically so they don't overlap
+    label.y = "top",
     rr.digits = 3,
     coef.digits = 3,
     parse = TRUE,
-    size = 5
+    size = 3
   ) +
   theme_bw() +
     scale_fill_viridis_d(
@@ -1746,21 +1744,19 @@ mainplot <- data_params |>
     shape = 19,
     stroke = 0.8
   ) +
-# regression line - one per platform
-  geom_smooth(aes(group = platform, color = platform, fill = platform),
-              method = "lm", se = TRUE, show.legend = FALSE,
-              linewidth = 1.2, alpha = 0.25, linetype = "solid") +
-  # Add regression equation - one per platform
+  # regression line
+  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE, color = "gray15", fill = "gray30", 
+              linewidth = 1.2, alpha = 0.25,linetype = "solid") +
+  # Add regression equation
   ggpmisc::stat_poly_eq(
-    aes(group = platform, color = platform,
-        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x,
     label.x = "right",
-    label.y = c(0.95, 0.85),  # stagger vertically so they don't overlap
+    label.y = "top",
     rr.digits = 3,
     coef.digits = 3,
     parse = TRUE,
-    size = 5
+    size = 3
   ) +
   theme_bw() +
     scale_fill_viridis_d(
@@ -1984,7 +1980,7 @@ p_eff <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5) +
+    coef.digits = 3, parse = TRUE, size = 3) +
   scale_color_viridis_d(option = "magma", begin = 0.3, end = 0.7) +
   theme_bw() +
   labs(
@@ -2035,7 +2031,7 @@ p_rew <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5) +
+    coef.digits = 3, parse = TRUE, size = 3) +
   scale_color_viridis_d(option = "magma", begin = 0.3, end = 0.7) +
   theme_bw() +
   labs(
@@ -2087,7 +2083,7 @@ p_a <- data_params |>
     ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5) +
+    coef.digits = 3, parse = TRUE, size = 3) +
   scale_color_viridis_d(option = "magma", begin = 0.3, end = 0.7) +
   theme_bw() +
   labs(
@@ -2312,7 +2308,7 @@ ggplot_a_tiktok <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    coef.digits = 3, parse = TRUE, size = 3
   ) +
   labs(x = "Self-reported addiction", y = "Wanting (T)") +
   scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
@@ -2333,7 +2329,7 @@ ggplot_a_netflix <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    coef.digits = 3, parse = TRUE, size = 3
   ) +
   labs(x = "Self-reported addiction", y = "Wanting (N)") +
   scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
@@ -2351,7 +2347,7 @@ ggplot_kr_tiktok <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    coef.digits = 3, parse = TRUE, size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
@@ -2373,7 +2369,7 @@ ggplot_kr_netflix <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    coef.digits = 3, parse = TRUE, size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
@@ -2395,7 +2391,7 @@ ggplot_ke_tiktok <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    coef.digits = 3, parse = TRUE, size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
@@ -2419,7 +2415,7 @@ ggplot_ke_netflix <- data_params |>
   ggpmisc::stat_poly_eq(
     aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    coef.digits = 3, parse = TRUE, size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
@@ -3081,9 +3077,9 @@ net_interp <- tolower(netflix_summary$Interpretation[net_idx])
 
 @tbl-wl shows the results of the Bayesian correlation analyses for self-reported addiction for TikTok and Netflix and the impulsivity measures.
 
-**TikTok:** The Bayesian correlation analyses reveal that the *wanting-liking* dissociation is not correlated with the BIS-11 total score or any of the subscales. The strongest correlation is with `r tik_var` (ρ = `r tik_rho`, 95% CI \[`r tik_lower`, `r tik_upper`\]), with a Bayes Factor of `r tik_bf`, indicating `r tik_interp`.
+**TikTok:** The Bayesian correlation analyses reveal that the *wanting-liking* dissociation is not correlated with the BIS-11 total score or any of the subscales. The strongest correlation is with `r tik_var` (ρ = `r tik_rho`, 95% CI [`r tik_lower`, `r tik_upper`]), with a Bayes Factor of `r tik_bf`, indicating `r tik_interp`.
 
-**Netflix:** The Netflix correlation analysis shows that the *wanting-liking* dissociation is not correlated with the BIS-11 total score or any of the subscales. The strongest correlation is with `r net_var` (ρ = `r net_rho`, 95% CI \[`r net_lower`, `r net_upper`\]), with a Bayes Factor of `r net_bf`, indicating `r net_interp`.
+**Netflix:** The Netflix correlation analysis shows that the *wanting-liking* dissociation is not correlated with the BIS-11 total score or any of the subscales. The strongest correlation is with `r net_var` (ρ = `r net_rho`, 95% CI [`r net_lower`, `r net_upper`]), with a Bayes Factor of `r net_bf`, indicating `r net_interp`.
 
 ```{r}
 #| label: fig-wl-corr
