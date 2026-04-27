@@ -1178,3 +1178,36 @@ ggsave(plot = p_data_sens, filename = "data_sensitivity.png", device = "png",
 ```
 
 Across the different hypotheses we observe a trend of a larger Bayes Factor for the strict subset. In general, the differences between the different subsets make little difference for the overall conclusions.
+
+```{r}
+# collect BF results for inline reporting
+bf_h1 <- purrr::map_dfr(datasets, function(dat) {
+  bf <- BayesFactor::ttestBF(x = dat$a_tiktok, y = dat$a_netflix, paired = TRUE, rscale = 1/3)
+  data.frame(bf = round(BayesFactor::extractBF(bf)$bf, 3))
+}, .id = "dataset")
+
+bf_h2 <- purrr::map_dfr(datasets, function(dat) {
+  bf <- BayesFactor::ttestBF(x = dat$wl_tiktok, y = dat$wl_netflix, paired = TRUE, rscale = 1/3)
+  data.frame(bf = round(BayesFactor::extractBF(bf)$bf, 3))
+}, .id = "dataset")
+
+bf_h3 <- purrr::map_dfr(datasets, function(dat) {
+  bf <- BayesFactor::correlationBF(x = dat$wl_tiktok, y = dat$bsmas_tiktok_total, rscale = 1/3)
+  data.frame(bf = round(BayesFactor::extractBF(bf)$bf, 3))
+}, .id = "dataset")
+```
+
+For **H1**, the Bayes Factors were:
+Full = `r sprintf("%.3f", bf_h1 |> filter(dataset=="dat_full") |> pull(bf))`,
+Main = `r sprintf("%.3f", bf_h1 |> filter(dataset=="dat_main") |> pull(bf))`,
+Strict = `r sprintf("%.3f", bf_h1 |> filter(dataset=="dat_strict") |> pull(bf))`.
+
+For **H2**:
+Full = `r sprintf("%.3f", bf_h2 |> filter(dataset=="dat_full") |> pull(bf))`,
+Main = `r sprintf("%.3f", bf_h2 |> filter(dataset=="dat_main") |> pull(bf))`,
+Strict = `r sprintf("%.3f", bf_h2 |> filter(dataset=="dat_strict") |> pull(bf))`.
+
+For **H3**:
+Full = `r sprintf("%.3f", bf_h3 |> filter(dataset=="dat_full") |> pull(bf))`,
+Main = `r sprintf("%.3f", bf_h3 |> filter(dataset=="dat_main") |> pull(bf))`,
+Strict = `r sprintf("%.3f", bf_h3 |> filter(dataset=="dat_strict") |> pull(bf))`.
