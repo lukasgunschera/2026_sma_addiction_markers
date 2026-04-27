@@ -86,7 +86,7 @@ ggpubr::ggarrange(
   gg_wlbsmas_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
   gg_wlbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
   gg_dsbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-8, -4, 0, 4, 8)),
-  nrow = 2, ncol = 3, align = "hv", labels = c("A", "B", "C"), font.label = list(size = 16, face = "bold")
+  nrow = 2, ncol = 3, align = "hv", labels = c("A", "B", "C", "D", "E"), font.label = list(size = 16, face = "bold")
 ) |>
   ggplot2::ggsave(
     path = here::here("output", "figures", "manuscript"), filename = "wlbsmas.png",
