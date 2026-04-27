@@ -1164,7 +1164,7 @@ The correlation estimate is **`r sprintf("%.3f", rho_mean)`**. The *95% Credible
 
 # Plot prior and posterior distributions for Hypothesis 1
 delta_range <- seq(-3, 3, length.out = 1000)
-prior_density <- dcauchy(delta_range, location = 0, scale = 1/sqrt(3))
+prior_density <- dcauchy(delta_range, location = 0, scale = 1/3)
 
 plot_data <- data.frame(
   delta = delta_range,
@@ -2110,8 +2110,6 @@ ggplot2::ggsave(
 combined_plot
 ```
 
-
-
 ### Self-reported addiction correlates
 
 Below, we examine correlations between other computational parameters (effort sensitivity, reward sensitivity) and self-reported levels of social media addiction (TikTok, BSMAS).
@@ -2234,21 +2232,30 @@ ggplot_a_base <- data_params |>
   geom_jitter(aes(fill = group, colour = group),
     width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
   ) +
-  geom_smooth(aes(group = 1),
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
     method = "lm", se = TRUE, show.legend = FALSE,
-    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
   ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
-    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = "Group", labels = c("Addiction", "No Addiction"),
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
   ) +
   scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
   labs(x = "Self-reported addiction", y = "Wanting (b)") +
-  scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_y_continuous(breaks = seq(-6, 9, 2), limits = c(-6.5, 9.5), expand = expansion(mult = c(0.02, 0.02))) +
   scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
   theme_custom() +
   theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank())
@@ -2259,21 +2266,30 @@ ggplot_a_deval <- data_params |>
   geom_jitter(aes(fill = group, colour = group),
     width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
   ) +
-  geom_smooth(aes(group = 1),
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
     method = "lm", se = TRUE, show.legend = FALSE,
-    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
   ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
-    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
   ) +
   scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
   labs(x = "Self-reported addiction", y = "Wanting (d)") +
-  scale_y_continuous(breaks = seq(-6, 8, 2), limits = c(-6.5, 8.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_y_continuous(breaks = seq(-6, 9, 2), limits = c(-6.5, 9.5), expand = expansion(mult = c(0.02, 0.02))) +
   scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
   theme_custom() +
   theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank()) 
@@ -2284,21 +2300,30 @@ ggplot_kr_base <- data_params |>
   geom_jitter(aes(fill = group, colour = group),
     width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
   ) +
-  geom_smooth(aes(group = 1),
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
     method = "lm", se = TRUE, show.legend = FALSE,
-    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
   ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
-    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
   ) +
   scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
   labs(x = "Self-reported addiction", y = "Reward sensitivity (b)") +
-  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 6), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 7), expand = expansion(mult = c(0.02, 0.02))) +
   scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
   theme_custom() +
   theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank()) 
@@ -2310,21 +2335,30 @@ ggplot_kr_deval <- data_params |>
   geom_jitter(aes(fill = group, colour = group),
     width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
   ) +
-  geom_smooth(aes(group = 1),
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
     method = "lm", se = TRUE, show.legend = FALSE,
-    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
   ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
-    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
   ) +
   scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
   labs(x = "Self-reported addiction", y = "Reward sensitivity (d)") +
-  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 6), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 7), expand = expansion(mult = c(0.02, 0.02))) +
   scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
   theme_custom() +
   theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank())
@@ -2335,21 +2369,30 @@ ggplot_ke_base <- data_params |>
   geom_jitter(aes(fill = group, colour = group),
     width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
   ) +
-  geom_smooth(aes(group = 1),
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
     method = "lm", se = TRUE, show.legend = FALSE,
-    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
   ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
-    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
   ) +
   scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
   labs(x = "Self-reported addiction", y = "Effort sensitivity (b)") +
-  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.75), expand = expansion(mult = c(0.02, 0.02))) +
   scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
   theme_custom() +
   theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank()) 
@@ -2360,21 +2403,30 @@ ggplot_ke_deval <- data_params |>
   geom_jitter(aes(fill = group, colour = group),
     width = 0.45, alpha = 0.85, height = 0.15, size = 2.8, shape = 19, stroke = 0.8
   ) +
-  geom_smooth(aes(group = 1),
+  # regression line - one per group
+  geom_smooth(aes(group = group, color = group, fill = group),
     method = "lm", se = TRUE, show.legend = FALSE,
-    color = "gray15", fill = "gray30", linewidth = 1.2, alpha = 0.25, linetype = "solid"
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
   ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
-    formula = y ~ x, label.x = "right", label.y = "top", rr.digits = 3,
-    coef.digits = 3, parse = TRUE, size = 5
+    aes(group = group, color = group,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    formula = y ~ x,
+    label.x = "right",
+    label.y = c(0.95, 0.85),
+    rr.digits = 3,
+    coef.digits = 3,
+    parse = TRUE,
+    size = 3
   ) +
   scale_colour_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, 
                          guide = guide_legend(override.aes = list(size = 3.5, alpha = 1, stroke = 1.2))
   ) +
   scale_fill_viridis_d(option = "magma", begin = 0.3, end = 0.7, name = NULL, alpha = 0.4, guide = "none") +
   labs(x = "Self-reported addiction", y = "Effort sensitivity (d)") +
-  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.5), expand = expansion(mult = c(0.02, 0.02))) +
+  scale_y_continuous(breaks = seq(0, 1.5, .25), limits = c(0, 1.75), expand = expansion(mult = c(0.02, 0.02))) +
   scale_x_continuous(breaks = seq(5, 30, 5), limits = c(4, 31), expand = expansion(mult = c(0.02, 0.02))) +
   theme_custom() +
   theme(legend.position = c(0.86, 0.80), legend.background = element_blank(), legend.key = element_blank())
@@ -2426,3 +2478,30 @@ ggsave(
 
 plots
 ```
+
+Present Bayesian correlation results.
+
+```{r}
+run_cor_bf <- function(x, y, rscale = 1/3, iterations = 10000) {
+  tbf      <- BayesFactor::correlationBF(x, y, rscale = rscale)
+  bf10     <- BayesFactor::extractBF(tbf)$bf
+  samps    <- posterior(tbf, iterations = iterations)[, "rho"]
+  list(
+    bf     = sprintf("%.3f", bf10),
+    median = sprintf("%.3f", median(samps)),
+    ci_lo  = sprintf("%.3f", quantile(samps, 0.025)),
+    ci_hi  = sprintf("%.3f", quantile(samps, 0.975))
+  )
+}
+
+res_kR_base    <- run_cor_bf(data_params$kR_baseline, data_params$bsmas_sum)
+res_kE_base    <- run_cor_bf(data_params$kE_baseline, data_params$bsmas_sum)
+res_kR_deval   <- run_cor_bf(data_params$kR_devalued, data_params$bsmas_sum)
+res_kE_deval   <- run_cor_bf(data_params$kE_devalued, data_params$bsmas_sum)
+```
+
+At baseline, reward sensitivity (kR) was not significantly correlated with social media addiction scores (BF~10~ = `r res_kR_base$bf`, median ρ = `r res_kR_base$median`, 95% CI \[`r res_kR_base$ci_lo`, `r res_kR_base$ci_hi`\]), nor was effort sensitivity (kE) (BF~10~ = `r res_kE_base$bf`, median ρ = `r res_kE_base$median`, 95% CI \[`r res_kE_base$ci_lo`, `r res_kE_base$ci_hi`\]).
+
+In the devalued condition, reward sensitivity (kR) showed a similar pattern (BF~10~ = `r res_kR_deval$bf`, median ρ = `r res_kR_deval$median`, 95% CI \[`r res_kR_deval$ci_lo`, `r res_kR_deval$ci_hi`\]), as did effort sensitivity (kE) (BF~10~ = `r res_kE_deval$bf`, median ρ = `r res_kE_deval$median`, 95% CI \[`r res_kE_deval$ci_lo`, `r res_kE_deval$ci_hi`\]).
+
+
