@@ -30,8 +30,8 @@ Run the below scripts in the order they are listed to reproduce the results pres
 ## Project Structure
 
 ```
-├── README.md                           # This file
-├── LICENSE                             # MIT License
+├── README.md                            # This file
+├── LICENSE                              # CC0 1.0 Universal License
 ├── data/
 │   ├── experiment1/                     # Data for Experiment 1
 |   |    ├── processed.R                 # Processed anonymous participant data (shared upon publication)
