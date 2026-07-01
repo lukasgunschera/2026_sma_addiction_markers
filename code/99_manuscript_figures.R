@@ -179,3 +179,30 @@ ggpubr::ggarrange(
     filename = "large_arranged_plot.png",
     device = "png", width = 18, height = 14, dpi = 1000, bg = "white"
   )
+
+# massive combined figure
+ggpubr::ggarrange(
+  # Row 1: Original first figure plots (6 plots)
+  gg_want_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-6, -3, 0, 3, 6), limits = c(-6, 6)),
+  gg_want_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-6, -3, 0, 3, 6), limits = c(-6, 6)),
+  gg_want_group_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-6, -3, 0, 3, 6), limits = c(-6, 6)),
+  gg_wantlike_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-4, 4)),
+  gg_wantlike_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-4, 4)),
+  gg_devalsens_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-6, -3, 0, 3, 6)),
+  # Row 2: Original second figure plots (5 plots + 1 empty)
+  gg_wantbsmas_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
+  gg_wantbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)) + labs(x = "Wanting"),
+  gg_wlbsmas_exp1 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
+  gg_wlbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-4, -2, 0, 2, 4), limits = c(-5, 5)),
+  gg_dsbsmas_exp2 + axis_theme + ggplot2::scale_x_continuous(breaks = c(-8, -4, 0, 4, 8)),
+  NULL,
+  nrow = 2, ncol = 6,
+  align = "hv",
+  labels = c("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", ""),
+  font.label = list(size = 20, face = "bold")
+) |>
+  ggplot2::ggsave(
+    path = here::here("output", "figures", "manuscript"),
+    filename = "figure1_linked.png",
+    device = "png", width = 40, height = 15, dpi = 200, bg = "white"
+  )

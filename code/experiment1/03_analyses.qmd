@@ -1539,19 +1539,23 @@ mainplot <- data_params |>
     shape = 19,
     stroke = 0.8
   ) +
-  # regression line
-  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE, color = "gray15", fill = "gray30", 
-              linewidth = 1.2, alpha = 0.25,linetype = "solid") +
-  # Add regression equation
+  # regression line - one per group
+  geom_smooth(aes(group = platform, color = platform, fill = platform),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
+  ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    aes(group = platform, color = platform,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x,
     label.x = "right",
-    label.y = "top",
+    label.y = c(0.95, 0.85),
     rr.digits = 3,
     coef.digits = 3,
     parse = TRUE,
-    size = 3
+    size = 5
   ) +
   theme_bw() +
     scale_fill_viridis_d(
@@ -1744,19 +1748,23 @@ mainplot <- data_params |>
     shape = 19,
     stroke = 0.8
   ) +
-  # regression line
-  geom_smooth(method = "lm", se = TRUE, show.legend = FALSE, color = "gray15", fill = "gray30", 
-              linewidth = 1.2, alpha = 0.25,linetype = "solid") +
-  # Add regression equation
+  # regression line - one per group
+  geom_smooth(aes(group = platform, color = platform, fill = platform),
+    method = "lm", se = TRUE, show.legend = FALSE,
+    linewidth = 1.2, alpha = 0.25,
+    linetype = "solid"
+  ) +
+  # add regression equation - one per group
   ggpmisc::stat_poly_eq(
-    aes(group = 1, label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
+    aes(group = platform, color = platform,
+        label = paste(..eq.label.., ..rr.label.., sep = "~~~")),
     formula = y ~ x,
     label.x = "right",
-    label.y = "top",
+    label.y = c(0.95, 0.85),
     rr.digits = 3,
     coef.digits = 3,
     parse = TRUE,
-    size = 3
+    size = 5
   ) +
   theme_bw() +
     scale_fill_viridis_d(
