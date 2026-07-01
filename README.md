@@ -60,5 +60,5 @@ Run the below scripts in the order they are listed to reproduce the results pres
 │   │   └── 05_analyses.qmd              # Comprehensive markdown of main analyses
 │   │   └── 06_sensitivity_analyses.qmd  # Comprehensive markdown documenting performed sensitivity analyses
 │   │   └── functions/                   # Various functions called in above scripts
-├── stan/                                # Stan models for modelling effort-based decision-making choice data
+│   ├── stan/                            # Stan models for modelling effort-based decision-making choice data
 ```
