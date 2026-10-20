@@ -18,24 +18,34 @@ renv::restore() # restore the environment
 
 #### Load dependencies ------------------------------------------------------------------------------------------------------
 
-if (!require("pacman")) install.packages("pacman")
-pacman::p_load(here, dplyr, readr, magrittr)
+if (!require("pacman")) {
+  install.packages("pacman")
+}
+pacman::p_load(here, tidyverse, purrr, dplyr, readr, magrittr)
 
 source(here::here("code", "experiment2", "functions", "fun_helper.R"))
 source(here::here("code", "experiment2", "functions", "fun_parsing.R"))
 
 # load data from raw data folder
 raw_data_location <- list.files(
-  path = here::here("data", "experiment2", "raw"), pattern = "\\.txt$",
-  full.names = TRUE, recursive = TRUE
+  path = here::here("data", "experiment2", "raw"),
+  pattern = "\\.txt$",
+  full.names = TRUE,
+  recursive = TRUE
 )
 
 if (length(raw_data_location) == 0) {
-  message("Raw data are not available - loading processed & anonymised data from file")
-  data <- readRDS(here::here("data", "experiment2", "processed", "data_cleaned.rds"))
+  message(
+    "Raw data are not available - loading processed & anonymised data from file"
+  )
+  data <- readRDS(here::here(
+    "data",
+    "experiment2",
+    "processed",
+    "data_cleaned.rds"
+  ))
 } else {
   message("Raw data found - parsing raw data files")
-
 
   files <- raw_data_location[grepl(".*\\.txt$", raw_data_location)]
 
@@ -45,12 +55,21 @@ if (length(raw_data_location) == 0) {
 
   # combine processed files into a single object
   data <- list(
-    demographics = do.call(rbind, lapply(processed_files, `[[`, "demographics")),
+    demographics = do.call(
+      rbind,
+      lapply(processed_files, `[[`, "demographics")
+    ),
     game = do.call(rbind, lapply(processed_files, `[[`, "game")),
     game_meta = do.call(rbind, lapply(processed_files, `[[`, "game_meta")),
-    modelling_data = do.call(rbind, lapply(processed_files, `[[`, "modelling_data")),
+    modelling_data = do.call(
+      rbind,
+      lapply(processed_files, `[[`, "modelling_data")
+    ),
     tiktok_use = do.call(rbind, lapply(processed_files, `[[`, "tiktok_use")),
-    questionnaires = do.call(rbind, lapply(processed_files, `[[`, "questionnaires"))
+    questionnaires = do.call(
+      rbind,
+      lapply(processed_files, `[[`, "questionnaires")
+    )
   )
 
   ## ANONYMISE RAW DATA =====================================================================================================
@@ -67,7 +86,7 @@ if (length(raw_data_location) == 0) {
 
   id_map <- tibble(
     original_id = all_ids,
-    anon_id     = paste0("P", str_pad(seq_along(all_ids), width = 3, pad = "0"))
+    anon_id = paste0("P", str_pad(seq_along(all_ids), width = 3, pad = "0"))
     # gives P001, P002, ... P240
   )
 
@@ -104,7 +123,11 @@ if (length(raw_data_location) == 0) {
   stopifnot(!any(all_ids %in% data$questionnaires$subj_id))
 
   # save the mapping separately (not to share)
-  write.csv(id_map, file = here::here("data", "experiment2", "id_mapping.csv"), row.names = FALSE)
+  write.csv(
+    id_map,
+    file = here::here("data", "experiment2", "id_mapping.csv"),
+    row.names = FALSE
+  )
 
   ## ERROR CHECKS ===========================================================================================================
 
@@ -129,7 +152,11 @@ if (length(raw_data_location) == 0) {
         age_group == "33-35" ~ 32,
         TRUE ~ 0
       ),
-      target_percent = ifelse(age_group %in% c("18-22", "23-27", "28-32", "33-35"), 25, 0),
+      target_percent = ifelse(
+        age_group %in% c("18-22", "23-27", "28-32", "33-35"),
+        25,
+        0
+      ),
       diff = n - target_n
     )
 
@@ -148,8 +175,10 @@ if (length(raw_data_location) == 0) {
   gender_check <- data$demographics |>
     dplyr::mutate(
       gender_group = case_when(
-        tolower(gender) %in% c("man", "male", "trans male", "trans man") ~ "Man",
-        tolower(gender) %in% c("woman", "female", "trans female", "trans woman") ~ "Woman",
+        tolower(gender) %in%
+          c("man", "male", "trans male", "trans man") ~ "Man",
+        tolower(gender) %in%
+          c("woman", "female", "trans female", "trans woman") ~ "Woman",
         TRUE ~ "Non-binary/Other"
       )
     ) |>
@@ -200,7 +229,11 @@ if (length(raw_data_location) == 0) {
     left_join(data$questionnaires |> dplyr::select(-group), by = "subj_id") |>
     left_join(data$tiktok_use |> dplyr::select(-group), by = "subj_id") |>
     dplyr::mutate(
-      exclude_catch = ifelse(catch_pass_easy == FALSE | catch_pass_hard == FALSE, TRUE, FALSE)
+      exclude_catch = ifelse(
+        catch_pass_easy == FALSE | catch_pass_hard == FALSE,
+        TRUE,
+        FALSE
+      )
     )
 
   # Get number of excluded participants
@@ -209,7 +242,10 @@ if (length(raw_data_location) == 0) {
       n_excluded_total = sum(exclude_catch, na.rm = TRUE),
       n_excluded_easy = sum(catch_pass_easy == FALSE, na.rm = TRUE),
       n_excluded_hard = sum(catch_pass_hard == FALSE, na.rm = TRUE),
-      n_excluded_both = sum(catch_pass_easy == FALSE & catch_pass_hard == FALSE, na.rm = TRUE)
+      n_excluded_both = sum(
+        catch_pass_easy == FALSE & catch_pass_hard == FALSE,
+        na.rm = TRUE
+      )
     )
 
   # IDs of excluded people
@@ -223,7 +259,9 @@ if (length(raw_data_location) == 0) {
 
   ### (3) Incomplete data exclusions ----------------------------------------------------------------------------------------
 
-  print("Incomplete data are removed inside the parsing function, please see function for details")
+  print(
+    "Incomplete data are removed inside the parsing function, please see function for details"
+  )
 
   ### (4) Non-compliance manual inspection and inclusion --------------------------------------------------------------------
 
@@ -239,23 +277,39 @@ if (length(raw_data_location) == 0) {
 
   # TikTok compliance - usage during waiting period
   tiktok_noncompliant <- data$demographics |>
-    dplyr::filter(tiktok_compliance_confirmation == 0 | tiktok_compliance_confirmation == "other") |>
+    dplyr::filter(
+      tiktok_compliance_confirmation == 0 |
+        tiktok_compliance_confirmation == "other"
+    ) |>
     dplyr::select(
-      subj_id, group, tiktok_compliance_confirmation,
-      tiktok_non_compliance_session, tiktok_non_compliance_explanation
+      subj_id,
+      group,
+      tiktok_compliance_confirmation,
+      tiktok_non_compliance_session,
+      tiktok_non_compliance_explanation
     )
 
   # Devaluation compliance - settings (greyscale, no sound)
   dev_noncompliant <- data$demographics |>
-    dplyr::filter(dev_compliance_confirmation == 0 | dev_compliance_confirmation == "other") |>
+    dplyr::filter(
+      dev_compliance_confirmation == 0 | dev_compliance_confirmation == "other"
+    ) |>
     dplyr::select(
-      subj_id, group, dev_compliance_confirmation,
-      dev_non_compliance_session, dev_non_compliance_explanation
+      subj_id,
+      group,
+      dev_compliance_confirmation,
+      dev_non_compliance_session,
+      dev_non_compliance_explanation
     )
 
   # Non-compliance summary
   compliance_summary <- data.frame(
-    type = c("Task baseline", "Task devaluation", "TikTok use", "Devaluation settings"),
+    type = c(
+      "Task baseline",
+      "Task devaluation",
+      "TikTok use",
+      "Devaluation settings"
+    ),
     n_noncompliant = c(
       nrow(task_noncompliant_b),
       nrow(task_noncompliant_d),
@@ -307,10 +361,21 @@ if (length(raw_data_location) == 0) {
   ### (5) Combine all exclusions and create clean data set ------------------------------------------------------------------
 
   # Strict exclusions for sensitivity analyses
-  strict_exclusion_sensitivity <- unique(c(task_noncompliant_b$subj_id, task_noncompliant_d$subj_id, tiktok_noncompliant$subj_id, dev_noncompliant$subj_id, manual_extra_exclusions, catch_exclusions))
+  strict_exclusion_sensitivity <- unique(c(
+    task_noncompliant_b$subj_id,
+    task_noncompliant_d$subj_id,
+    tiktok_noncompliant$subj_id,
+    dev_noncompliant$subj_id,
+    manual_extra_exclusions,
+    catch_exclusions
+  ))
 
   # Combine all exclusion vectors
-  all_exclusions <- unique(c(catch_exclusions, manual_compliance_exclusions, manual_extra_exclusions))
+  all_exclusions <- unique(c(
+    catch_exclusions,
+    manual_compliance_exclusions,
+    manual_extra_exclusions
+  ))
 
   # Add exclusion flags to demographics
   data$demographics <- data$demographics |>
@@ -325,37 +390,63 @@ if (length(raw_data_location) == 0) {
 
   # Create cleaned data object (excluding all flagged participants)
   data_clean <- list(
-    demographics = data$demographics |> dplyr::filter(subj_id %in% included_ids),
-    questionnaires = data$questionnaires |> dplyr::filter(subj_id %in% included_ids),
+    demographics = data$demographics |>
+      dplyr::filter(subj_id %in% included_ids),
+    questionnaires = data$questionnaires |>
+      dplyr::filter(subj_id %in% included_ids),
     tiktok_use = data$tiktok_use |> dplyr::filter(subj_id %in% included_ids),
     game = data$game |> dplyr::filter(subj_id %in% included_ids),
     game_meta = data$game_meta |> dplyr::filter(subj_id %in% included_ids),
-    modelling_data = data$modelling_data |> dplyr::filter(subjID %in% included_ids)
+    modelling_data = data$modelling_data |>
+      dplyr::filter(subjID %in% included_ids)
   )
 
   # Vector of included identifiers for strict sensitivity analyses
-  included_ids_strict_sensitivity <- data$demographics$subj_id[!data$demographics$subj_id %in% strict_exclusion_sensitivity]
+  included_ids_strict_sensitivity <- data$demographics$subj_id[
+    !data$demographics$subj_id %in% strict_exclusion_sensitivity
+  ]
 
   # Create strict dataset for sensitivity analyses
   data_strict_sensitivity <- list(
-    demographics = data$demographics |> dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
-    questionnaires = data$questionnaires |> dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
-    tiktok_use = data$tiktok_use |> dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
-    game = data$game |> dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
-    game_meta = data$game_meta |> dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
-    modelling_data = data$modelling_data |> dplyr::filter(subjID %in% included_ids_strict_sensitivity)
+    demographics = data$demographics |>
+      dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
+    questionnaires = data$questionnaires |>
+      dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
+    tiktok_use = data$tiktok_use |>
+      dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
+    game = data$game |>
+      dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
+    game_meta = data$game_meta |>
+      dplyr::filter(subj_id %in% included_ids_strict_sensitivity),
+    modelling_data = data$modelling_data |>
+      dplyr::filter(subjID %in% included_ids_strict_sensitivity)
   )
 
   # save dataset without exclusions for sensitivity analyses
-  saveRDS(data, here::here("data", "experiment2", "processed", "data_sensitivity_full.rds"))
+  saveRDS(
+    data,
+    here::here("data", "experiment2", "processed", "data_sensitivity_full.rds")
+  )
   # save dataset with strict exclusions
-  saveRDS(data_strict_sensitivity, here::here("data", "experiment2", "processed", "data_sensitivity_strict.rds"))
+  saveRDS(
+    data_strict_sensitivity,
+    here::here(
+      "data",
+      "experiment2",
+      "processed",
+      "data_sensitivity_strict.rds"
+    )
+  )
 
   # Final exclusion summary
   final_exclusion_summary <- data.frame(
     criterion = c(
-      "Original sample", "Catch questions", "Manual compliance",
-      "Manual extra", "Total excluded", "Final sample"
+      "Original sample",
+      "Catch questions",
+      "Manual compliance",
+      "Manual extra",
+      "Total excluded",
+      "Final sample"
     ),
     n = c(
       nrow(data$demographics),
@@ -370,13 +461,14 @@ if (length(raw_data_location) == 0) {
   cat("\n=== FINAL EXCLUSION SUMMARY ===\n")
   cat("\nAll excluded IDs:", paste(all_exclusions, collapse = ", "), "\n")
 
-
   ## PARSING META DATA ======================================================================================================
 
   ### Load meta data from meta folder
   meta_data_location <- list.files(
-    path = here::here("data", "experiment2", "meta"), pattern = "\\.csv$",
-    full.names = TRUE, recursive = TRUE
+    path = here::here("data", "experiment2", "meta"),
+    pattern = "\\.csv$",
+    full.names = TRUE,
+    recursive = TRUE
   )
 
   ### Read and combine all csv files
@@ -401,10 +493,22 @@ if (length(raw_data_location) == 0) {
 
   ## SAVE PROCESSED DATA ====================================================================================================
 
-  saveRDS(data_clean, here::here("data", "experiment2", "processed", "data_clean.rds"))
-  saveRDS(all_exclusions, here::here("data", "experiment2", "processed", "excluded_ids.rds"))
-  saveRDS(final_exclusion_summary, here::here("data", "experiment2", "processed", "exclusion_summary.rds"))
-  saveRDS(meta_data, here::here("data", "experiment2", "processed", "meta_data.rds"))
+  saveRDS(
+    data_clean,
+    here::here("data", "experiment2", "processed", "data_clean.rds")
+  )
+  saveRDS(
+    all_exclusions,
+    here::here("data", "experiment2", "processed", "excluded_ids.rds")
+  )
+  saveRDS(
+    final_exclusion_summary,
+    here::here("data", "experiment2", "processed", "exclusion_summary.rds")
+  )
+  saveRDS(
+    meta_data,
+    here::here("data", "experiment2", "processed", "meta_data.rds")
+  )
 }
 
 ## CREATE CODEBOOK ==========================================================================================================
