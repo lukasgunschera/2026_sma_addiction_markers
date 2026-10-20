@@ -30,8 +30,8 @@ Run the below scripts in the order they are listed to reproduce the results pres
 ## Project Structure
 
 ```
-├── README.md                           # This file
-├── LICENSE                             # MIT License
+├── README.md                            # This file
+├── LICENSE                              # CC0 1.0 Universal License
 ├── data/
 │   ├── experiment1/                     # Data for Experiment 1
 |   |    ├── processed.R                 # Processed anonymous participant data (shared upon publication)
@@ -60,5 +60,6 @@ Run the below scripts in the order they are listed to reproduce the results pres
 │   │   └── 05_analyses.qmd              # Comprehensive markdown of main analyses
 │   │   └── 06_sensitivity_analyses.qmd  # Comprehensive markdown documenting performed sensitivity analyses
 │   │   └── functions/                   # Various functions called in above scripts
-├── stan/                                # Stan models for modelling effort-based decision-making choice data
+│   ├── stan/                            # Stan models for modelling effort-based decision-making choice data
+├── output/                              # All script outputs including figures and tables
 ```
